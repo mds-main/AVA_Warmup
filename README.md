@@ -1,12 +1,13 @@
 # AVA Spec Warm Up
 
-Standalone Flask application for warming up a Genesys Cloud AVA/Web Messaging deployment. It opens Web Messaging conversations, sends the fixed message `no help needed`, records transport timing metrics, and exits without calling a Judge LLM, Ollama, or any suite-builder workflow.
+Standalone Flask application for warming up a Genesys Cloud AVA/Web Messaging deployment. It opens Web Messaging conversations, sends the fixed message `no help needed`, records transport timing metrics, and uses a locally installed LLM for the warm-up workflow.
 
 ## What It Does
 
 - Runs the fixed suite `AVA Spec Warm Up Suite`.
 - Runs the fixed scenario `No Help Needed Warm Up`.
 - Sends exactly `no help needed` for every attempt.
+- Uses a local Ollama model. `gemma4:e4b` is recommended because this application has been optimized for it.
 - Captures Web Messaging transport success, timeout, failure, latency, stage timing, and compact diagnostics.
 - Supports manual runs, one persistent local schedule, live status, stop requests, local history, and JSON/CSV/PNG exports.
 
@@ -20,6 +21,33 @@ python3 -m venv .venv
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 ```
+
+Install the local LLM with Ollama before running warm-ups. On macOS, install Ollama with Homebrew or from the Ollama desktop installer:
+
+```bash
+brew install ollama
+```
+
+Start Ollama if it is not already running:
+
+```bash
+ollama serve
+```
+
+In a separate terminal, pull the recommended model:
+
+```bash
+ollama pull gemma4:e4b
+```
+
+Verify the model is installed and responding:
+
+```bash
+ollama list
+ollama run gemma4:e4b "Respond with ready."
+```
+
+Keep Ollama running while you use the warm-up app. In the web form, use `gemma4:e4b` as the LLM model label unless you intentionally test a different local model.
 
 PNG export uses Playwright Chromium. Install the browser once if you want `Export PNG` to work:
 
@@ -37,7 +65,7 @@ Open `http://localhost:5000`. The app runs on `0.0.0.0:5000` with Flask debug mo
 
 ## Running A Warm-Up
 
-Use the `Run` page to start a manual warm-up. Deployment ID and region are required, either from the form or environment defaults. The optional LLM model label is stored as run metadata only; it does not call an LLM.
+Use the `Run` page to start a manual warm-up. Deployment ID and region are required, either from the form or environment defaults. Enter `gemma4:e4b` in the LLM model label field after installing it locally with Ollama.
 
 Run controls:
 
