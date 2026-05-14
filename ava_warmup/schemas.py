@@ -164,6 +164,10 @@ class AttemptResult(BaseModel):
     judge_diagnostics: list[Any] = Field(default_factory=list)
     debug_frames: list[dict[str, Any]] = Field(default_factory=list)
     timeout_diagnostics: Optional[TimeoutDiagnostics] = None
+    conversation_id: Optional[str] = None
+    participant_id: Optional[str] = None
+    session_token: Optional[str] = None
+    conversation_id_candidates: list[str] = Field(default_factory=list)
 
 
 class PerformanceStageSummary(BaseModel):

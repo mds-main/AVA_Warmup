@@ -1273,6 +1273,7 @@
     body.innerHTML = ''
       + '<div class="eyebrow" style="margin-bottom:8px">Stage timings</div>'
       + (stages || '<div class="stage__empty">No stage timings captured.</div>')
+      + renderGenesysAttributes(a)
       + '<div class="eyebrow" style="margin-top:18px;margin-bottom:8px">Web Messenger interaction</div>'
       + (a.conversation && a.conversation.length
           ? '<div class="conv">' + conv + '</div>'
@@ -1280,6 +1281,47 @@
       + (a.error
           ? '<div style="margin-top:16px;padding:12px;border:1px solid oklch(58% 0.19 25 / 0.4);background:var(--err-soft);border-radius:10px;font-family:var(--mono);font-size:12px;color:var(--err)">' + escapeHtml(a.error) + '</div>'
           : '');
+  }
+
+  function renderGenesysAttributes(a) {
+    var raw = (a && a.raw) || {};
+    var td = raw.timeout_diagnostics || {};
+    var conversationId = raw.conversation_id || td.conversation_id || null;
+    var participantId = raw.participant_id || td.participant_id || null;
+    var sessionToken = raw.session_token || null;
+    var candidates = raw.conversation_id_candidates && raw.conversation_id_candidates.length
+      ? raw.conversation_id_candidates
+      : (td.conversation_id_candidates || []);
+    var runMeta = (state.warmup) || (state.report && state.report.model_warmup_run) || {};
+    var deploymentId = runMeta.deployment_id || state.config.gc_deployment_id || '';
+    var region = runMeta.region || state.config.gc_region || '';
+
+    function row(label, value, mono) {
+      if (value === null || value === undefined || value === '') return '';
+      var cls = mono ? 'mono' : '';
+      return '<div class="genesys__row">'
+        + '<div class="genesys__lbl">' + escapeHtml(label) + '</div>'
+        + '<div class="genesys__val ' + cls + '">' + escapeHtml(String(value)) + '</div>'
+        + '</div>';
+    }
+
+    var rows = ''
+      + row('conversationId (interactionId)', conversationId, true)
+      + row('participantId', participantId, true)
+      + row('sessionToken', sessionToken, true)
+      + row('deploymentId', deploymentId, true)
+      + row('region', region, false);
+    if (Array.isArray(candidates) && candidates.length) {
+      rows += '<div class="genesys__row">'
+        + '<div class="genesys__lbl">conversationId candidates</div>'
+        + '<div class="genesys__val mono">' + candidates.map(escapeHtml).join('<br>') + '</div>'
+        + '</div>';
+    }
+    if (!rows) {
+      rows = '<div class="placeholder">No Genesys identifiers were captured for this attempt.</div>';
+    }
+    return '<div class="eyebrow" style="margin-top:18px;margin-bottom:8px">Genesys attributes</div>'
+      + '<div class="genesys">' + rows + '</div>';
   }
 
   // ----------------------------------------------------------------

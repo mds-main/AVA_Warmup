@@ -341,6 +341,14 @@ class ModelWarmUpRunner:
                 warmup_stage_durations_ms=stage_durations_ms,
                 timeout_diagnostics=timeout_diagnostics,
                 debug_frames=client.get_debug_frames() if hasattr(client, "get_debug_frames") else [],
+                conversation_id=getattr(client, "conversation_id", None),
+                participant_id=getattr(client, "participant_id", None),
+                session_token=getattr(client, "_token", None),
+                conversation_id_candidates=(
+                    client.get_conversation_id_candidates()
+                    if hasattr(client, "get_conversation_id_candidates")
+                    else []
+                ),
             )
 
         async def run_recorded_step(stage_prefix: str, message: str, awaitable):

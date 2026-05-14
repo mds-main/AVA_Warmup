@@ -1138,6 +1138,32 @@ a { color: inherit; text-decoration: none; }
 }
 .detail-panel__bd { overflow: auto; padding: 16px; }
 
+/* Genesys attributes */
+.genesys {
+  display: flex; flex-direction: column; gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--bg-1);
+}
+.genesys__row {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  padding: 3px 0;
+}
+.genesys__row + .genesys__row { border-top: 1px dashed var(--line); }
+.genesys__lbl {
+  color: var(--fg-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.genesys__val { color: var(--fg); word-break: break-all; }
+.genesys__val.mono { font-family: var(--mono); font-size: 12px; }
+
 /* Conversation */
 .conv {
   display: flex; flex-direction: column; gap: 8px;

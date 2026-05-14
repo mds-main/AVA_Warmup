@@ -188,6 +188,10 @@ class WebMessagingClient:
             ) from exc
 
     async def disconnect(self) -> None:
+        # Keep diagnostic fields (conversation_id, participant_id, candidates,
+        # debug_frames, _token) so callers can read them after disconnect —
+        # build_result is invoked after the finally that calls us, and the
+        # client instance is per-attempt anyway.
         if self._ws is not None:
             try:
                 await self._ws.close()
@@ -195,11 +199,6 @@ class WebMessagingClient:
                 pass
             finally:
                 self._ws = None
-                self._token = None
-                self.conversation_id = None
-                self.participant_id = None
-                self._conversation_id_candidates = []
-                self._debug_frames = []
 
     async def _receive_agent_message(self) -> str:
         deadline = asyncio.get_event_loop().time() + self.timeout
