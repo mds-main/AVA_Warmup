@@ -68,6 +68,20 @@
     cfg: null,
   };
 
+  // Cadence helpers — env may set default_cadence to a named value
+  // (hourly/daily/weekly/monthly) or a positive-integer "every N hours" string.
+  function parseCadenceHours(value) {
+    var n = parseInt(value, 10);
+    if (isNaN(n) || n < 1) return 0;
+    return n;
+  }
+  function normalizeCadenceFromConfig(value) {
+    var raw = String(value || '').trim().toLowerCase();
+    if (['hourly', 'daily', 'weekly', 'monthly'].indexOf(raw) !== -1) return raw;
+    if (parseCadenceHours(raw) > 0) return 'interval';
+    return 'daily';
+  }
+
   // Pre-fill cfg from server defaults (env-driven AppConfig).
   state.cfg = {
     deployment_id: state.config.gc_deployment_id || '',
@@ -79,7 +93,8 @@
     pacing_seconds: Number(state.config.default_pacing_seconds) || 1.0,
     performance_profile: state.config.default_performance_profile || 'safe_adaptive',
     suite_id: state.selectedSuiteId,
-    cadence: state.config.default_cadence || 'daily',
+    cadence: normalizeCadenceFromConfig(state.config.default_cadence),
+    cadence_hours: parseCadenceHours(state.config.default_cadence) || 3,
     timezone_name: state.config.default_timezone || 'UTC',
     time_hhmm: state.config.default_time_hhmm || '02:00',
     minute: state.config.default_minute != null ? state.config.default_minute : 0,
@@ -1161,15 +1176,20 @@
 
   function renderScheduleTab() {
     var cfg = state.cfg;
+    var cadenceOptions = ['hourly','daily','weekly','monthly','interval'];
+    var cadenceLabels = { hourly: 'hourly', daily: 'daily', weekly: 'weekly', monthly: 'monthly', interval: 'every N hours' };
     return ''
       + '<div class="field"><label class="field__lbl">Cadence</label><div class="seg">'
-      + ['hourly','daily','weekly','monthly'].map(function (c) {
-          return '<button class="seg__opt' + (cfg.cadence === c ? ' active' : '') + '" data-cfg="cadence" data-value="' + c + '">' + c + '</button>';
+      + cadenceOptions.map(function (c) {
+          return '<button class="seg__opt' + (cfg.cadence === c ? ' active' : '') + '" data-cfg="cadence" data-value="' + c + '">' + cadenceLabels[c] + '</button>';
         }).join('')
       + '</div></div>'
+      + (cfg.cadence === 'interval'
+          ? '<div class="field"><label class="field__lbl">Interval (hours)</label><input class="input" type="number" min="1" step="1" data-cfg="cadence_hours" value="' + (cfg.cadence_hours || 3) + '"><span class="field__hint">Run every N hours, anchored to the start date at 00:MM local time.</span></div>'
+          : '')
       + '<div class="row">'
-      + (cfg.cadence === 'hourly'
-          ? '<div class="field"><label class="field__lbl">Hourly minute</label><input class="input" type="number" min="0" max="59" data-cfg="minute" value="' + cfg.minute + '"><span class="field__hint">Minute of the hour to fire</span></div>'
+      + (cfg.cadence === 'hourly' || cfg.cadence === 'interval'
+          ? '<div class="field"><label class="field__lbl">Minute</label><input class="input" type="number" min="0" max="59" data-cfg="minute" value="' + cfg.minute + '"><span class="field__hint">Minute of the hour to fire</span></div>'
           : '<div class="field"><label class="field__lbl">Time</label><input class="input" type="time" data-cfg="time_hhmm" value="' + escapeHtml(cfg.time_hhmm) + '"></div>')
       + '<div class="field"><label class="field__lbl">Timezone</label><input class="input" data-cfg="timezone_name" value="' + escapeHtml(cfg.timezone_name) + '"></div>'
       + '</div>'
@@ -1474,6 +1494,11 @@
       return;
     }
     var payload = Object.assign({}, cfg);
+    // Translate the UI's "interval" cadence to the numeric form the server accepts.
+    if (payload.cadence === 'interval') {
+      payload.cadence = String(Math.max(1, parseInt(cfg.cadence_hours, 10) || 1));
+    }
+    delete payload.cadence_hours;
     fetch('/run/model_warm_up/schedule', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -1674,6 +1699,8 @@
       var v = el.value;
       if (key === 'attempt_count' || key === 'worker_count' || key === 'minute' || key === 'day_of_month' || key === 'weekday') {
         state.cfg[key] = parseInt(v || '0', 10) || 0;
+      } else if (key === 'cadence_hours') {
+        state.cfg[key] = Math.max(1, parseInt(v || '1', 10) || 1);
       } else if (key === 'pacing_seconds') {
         state.cfg[key] = parseFloat(v) || 1.0;
       } else {

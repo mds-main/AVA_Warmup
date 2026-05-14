@@ -1165,12 +1165,15 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
         Designed for DigitalOcean App Platform where the local filesystem is
         ephemeral: a redeploy can wipe `model_warmup_schedule.json`, so we
         re-create it from env every boot when `AVA_WARMUP_AUTO_SCHEDULE_ENABLED`
-        is true. This always overwrites the prior schedule with the env values,
-        which is the intended behavior for env-as-source-of-truth deploys.
+        is true. UI-saved schedules (``source == "user"``) take precedence and
+        are NOT overwritten — env vars are the seed; UI edits win once made.
         """
 
         current_config: AppConfig = app.config["app_config"]
         if not current_config.auto_schedule_enabled:
+            return
+        existing = _schedule_store().load() or {}
+        if str(existing.get("source") or "").lower() == "user":
             return
         deployment_id = (current_config.gc_deployment_id or "").strip()
         region = (current_config.gc_region or "").strip()
@@ -1236,6 +1239,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
         except ValueError:
             return
         schedule_payload["schedule_label"] = model_warmup_schedule_label(schedule_payload)
+        schedule_payload["source"] = "env"
         app.config["model_warmup_schedule_status"] = _schedule_store().save_schedule(
             schedule_payload
         )
@@ -1440,6 +1444,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
                     _field(data, "model_warmup_suite_id", "suite_id", default=DEFAULT_WARMUP_SUITE_ID)
                 ),
             )
+        schedule_payload["source"] = "user"
         app.config["model_warmup_schedule_status"] = _schedule_store().save_schedule(
             schedule_payload
         )
