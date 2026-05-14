@@ -332,11 +332,16 @@ class WebMessagingClient:
     def _capture_message_id_from_frame(self, payload: object) -> None:
         """Record the Genesys messageId from a StructuredMessage frame.
 
-        The guest API echoes our outbound messages and the bot's replies as
-        ``{"type": "message", "class": "StructuredMessage", "body": {"id": "<uuid>", ...}}``.
-        That ``body.id`` is the Genesys messageId, which the Conversations
-        REST API (``GET /api/v2/conversations/messages/{messageId}/details``)
-        can translate into the conversationId.
+        The Web Messaging guest API uses several shapes depending on the
+        deployment/protocol version. We accept any of:
+
+        - ``body.id``                — older / canonical shape
+        - ``body.channel.messageId`` — newer shape (most common today)
+        - ``body.messageId``         — occasional alternate
+
+        Whichever value we capture goes to
+        ``GET /api/v2/conversations/messages/{messageId}/details`` to
+        translate into the real Genesys conversationId.
         """
 
         if self.message_id is not None or not isinstance(payload, dict):
@@ -346,12 +351,19 @@ class WebMessagingClient:
         body = payload.get("body")
         if not isinstance(body, dict):
             return
-        candidate = body.get("id")
-        if not isinstance(candidate, str):
-            return
-        normalized = candidate.strip()
-        if normalized and self._is_likely_conversation_id(normalized):
-            self.message_id = normalized
+
+        candidates: list[object] = [body.get("id"), body.get("messageId")]
+        channel = body.get("channel")
+        if isinstance(channel, dict):
+            candidates.append(channel.get("messageId"))
+
+        for raw_candidate in candidates:
+            if not isinstance(raw_candidate, str):
+                continue
+            normalized = raw_candidate.strip()
+            if normalized and self._is_likely_conversation_id(normalized):
+                self.message_id = normalized
+                return
 
     def _capture_conversation_id_candidate(self, value: object, is_explicit: bool = False) -> None:
         if not isinstance(value, str) or not is_explicit:

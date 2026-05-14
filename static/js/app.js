@@ -1386,7 +1386,7 @@
         + '<span class="genesys__hint">Set AVA_WARMUP_GENESYS_OAUTH_CLIENT_ID / _CLIENT_SECRET to resolve via the Conversations API.</span></div>'
         + '</div>';
     }
-    rows += row('messageId', messageId, true, messageId ? '$.body.id (StructuredMessage)' : '');
+    rows += row('messageId', messageId, true, messageId ? 'from StructuredMessage frame' : '');
     rows += row('participantId', participantId, true);
     rows += row('sessionToken', sessionToken, true);
     rows += row('deploymentId', deploymentId, true);
