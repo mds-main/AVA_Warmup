@@ -43,6 +43,12 @@ class AppConfig(BaseModel):
     admin_user: Optional[str] = None
     admin_password: Optional[str] = None
     session_secret_key: Optional[str] = None
+    # OAuth client-credentials for the Genesys Conversations REST API. When
+    # both are set, the app can translate a Web Messaging messageId into the
+    # Genesys conversationId / interactionId via
+    # GET /api/v2/conversations/messages/{messageId}/details.
+    genesys_oauth_client_id: Optional[str] = None
+    genesys_oauth_client_secret: Optional[str] = None
 
     @field_validator(
         "response_timeout",
@@ -169,6 +175,10 @@ class AttemptResult(BaseModel):
     participant_id: Optional[str] = None
     session_token: Optional[str] = None
     conversation_id_candidates: list[str] = Field(default_factory=list)
+    # First Genesys messageId we observed in a StructuredMessage frame; this
+    # is what gets passed to /api/v2/conversations/messages/{messageId}/details
+    # to translate into the real conversationId / interactionId.
+    message_id: Optional[str] = None
     # Every UUID-shaped value we observed across received frames, mapped to
     # the JSON path of its first occurrence. Helps when Genesys does not
     # send an explicit conversationId key for the guest protocol.

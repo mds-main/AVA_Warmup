@@ -1251,6 +1251,52 @@
     panel.classList.add('open');
     panel.setAttribute('aria-hidden', 'false');
     renderDetail();
+    maybeLookupGenesysConversationId(a);
+  }
+
+  // Per-attempt cache so reopening the detail panel doesn't refire the
+  // Genesys REST call we already resolved.
+  var genesysConversationLookupCache = {};
+  function maybeLookupGenesysConversationId(a) {
+    if (!a || !a.raw) return;
+    var raw = a.raw;
+    if (raw.conversation_id) return;
+    var messageId = raw.message_id;
+    if (!messageId) return;
+    if (!state.config.genesys_oauth_configured) return;
+    var cacheKey = String(messageId);
+    if (genesysConversationLookupCache[cacheKey]) {
+      applyGenesysLookup(a, genesysConversationLookupCache[cacheKey]);
+      return;
+    }
+    var runMeta = (state.warmup) || (state.report && state.report.model_warmup_run) || {};
+    var region = runMeta.region || state.config.gc_region || '';
+    var url = '/genesys/conversation_lookup?message_id=' + encodeURIComponent(messageId)
+      + (region ? '&region=' + encodeURIComponent(region) : '');
+    a._genesysLookupState = 'loading';
+    renderDetail();
+    fetch(url, { headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        genesysConversationLookupCache[cacheKey] = body;
+        applyGenesysLookup(a, body);
+      })
+      .catch(function (err) {
+        var failure = { ok: false, error: 'Network error: ' + err.message };
+        genesysConversationLookupCache[cacheKey] = failure;
+        applyGenesysLookup(a, failure);
+      });
+  }
+  function applyGenesysLookup(a, body) {
+    if (!a || !a.raw) return;
+    if (body && body.ok && body.conversation_id) {
+      a.raw.conversation_id = body.conversation_id;
+      a._genesysLookupState = 'resolved';
+    } else {
+      a._genesysLookupState = 'error';
+      a._genesysLookupError = (body && body.error) || 'Lookup failed';
+    }
+    if (state.detailAttempt === a) renderDetail();
   }
   function closeDetail() {
     state.detailAttempt = null;
@@ -1300,28 +1346,11 @@
     var conversationId = raw.conversation_id || td.conversation_id || null;
     var participantId = raw.participant_id || td.participant_id || null;
     var sessionToken = raw.session_token || null;
-    var candidates = raw.conversation_id_candidates && raw.conversation_id_candidates.length
-      ? raw.conversation_id_candidates
-      : (td.conversation_id_candidates || []);
+    var messageId = raw.message_id || null;
     var uuidPaths = raw.genesys_uuid_paths || {};
     var runMeta = (state.warmup) || (state.report && state.report.model_warmup_run) || {};
     var deploymentId = runMeta.deployment_id || state.config.gc_deployment_id || '';
     var region = runMeta.region || state.config.gc_region || '';
-
-    // If we didn't capture an explicit conversationId, fall back to the first
-    // UUID we observed in any frame so the field is never empty when frames
-    // were received — the path next to it tells you what field it came from.
-    var inferredConversationId = null;
-    var inferredPath = null;
-    if (!conversationId) {
-      var uuidValues = Object.keys(uuidPaths);
-      if (uuidValues.length) {
-        inferredConversationId = uuidValues[0];
-        inferredPath = uuidPaths[inferredConversationId];
-      } else if (candidates.length) {
-        inferredConversationId = candidates[0];
-      }
-    }
 
     function row(label, value, mono, hint) {
       if (value === null || value === undefined || value === '') return '';
@@ -1334,16 +1363,30 @@
     }
 
     var rows = '';
+    // Authoritative conversationId — either pre-resolved by the REST lookup
+    // or fetched lazily when the detail panel opened. The Web Messaging
+    // guest WebSocket does not expose this field directly; see
+    // GET /api/v2/conversations/messages/{messageId}/details.
     if (conversationId) {
       rows += row('conversationId (interactionId)', conversationId, true);
-    } else if (inferredConversationId) {
-      rows += row(
-        'conversationId (inferred)',
-        inferredConversationId,
-        true,
-        inferredPath ? 'from ' + inferredPath : 'from candidates'
-      );
+    } else if (messageId && state.config.genesys_oauth_configured) {
+      var lookupHint = 'Looking up via Conversations API…';
+      if (a._genesysLookupState === 'error') {
+        lookupHint = a._genesysLookupError || 'Lookup failed';
+      }
+      rows += '<div class="genesys__row">'
+        + '<div class="genesys__lbl">conversationId (interactionId)</div>'
+        + '<div class="genesys__val mono"><span style="color:var(--fg-3)">—</span>'
+        + '<span class="genesys__hint">' + escapeHtml(lookupHint) + '</span></div>'
+        + '</div>';
+    } else if (messageId) {
+      rows += '<div class="genesys__row">'
+        + '<div class="genesys__lbl">conversationId (interactionId)</div>'
+        + '<div class="genesys__val mono"><span style="color:var(--fg-3)">—</span>'
+        + '<span class="genesys__hint">Set AVA_WARMUP_GENESYS_OAUTH_CLIENT_ID / _CLIENT_SECRET to resolve via the Conversations API.</span></div>'
+        + '</div>';
     }
+    rows += row('messageId', messageId, true, messageId ? '$.body.id (StructuredMessage)' : '');
     rows += row('participantId', participantId, true);
     rows += row('sessionToken', sessionToken, true);
     rows += row('deploymentId', deploymentId, true);
@@ -1357,11 +1400,6 @@
       rows += '<div class="genesys__row">'
         + '<div class="genesys__lbl">All UUIDs in frames</div>'
         + '<div class="genesys__val mono">' + pathList + '</div>'
-        + '</div>';
-    } else if (Array.isArray(candidates) && candidates.length) {
-      rows += '<div class="genesys__row">'
-        + '<div class="genesys__lbl">conversationId candidates</div>'
-        + '<div class="genesys__val mono">' + candidates.map(escapeHtml).join('<br>') + '</div>'
         + '</div>';
     }
     if (!rows) {

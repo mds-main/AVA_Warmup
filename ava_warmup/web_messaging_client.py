@@ -40,6 +40,11 @@ class WebMessagingClient:
         self._token: Optional[str] = None
         self.conversation_id: Optional[str] = None
         self.participant_id: Optional[str] = None
+        # First Genesys messageId we observed in any StructuredMessage frame.
+        # The guest WebSocket protocol does not expose conversationId directly
+        # (see GET /api/v2/conversations/messages/{messageId}/details for the
+        # documented lookup path), so we keep this for the post-hoc REST call.
+        self.message_id: Optional[str] = None
         self._conversation_id_candidates: list[str] = []
         # Map of UUID-shaped value -> JSON path of first occurrence in any
         # frame we received. Useful when Genesys never sends a frame containing
@@ -322,6 +327,31 @@ class WebMessagingClient:
         _walk(payload)
         if self.conversation_id:
             self._add_conversation_id_candidate(self.conversation_id)
+        self._capture_message_id_from_frame(payload)
+
+    def _capture_message_id_from_frame(self, payload: object) -> None:
+        """Record the Genesys messageId from a StructuredMessage frame.
+
+        The guest API echoes our outbound messages and the bot's replies as
+        ``{"type": "message", "class": "StructuredMessage", "body": {"id": "<uuid>", ...}}``.
+        That ``body.id`` is the Genesys messageId, which the Conversations
+        REST API (``GET /api/v2/conversations/messages/{messageId}/details``)
+        can translate into the conversationId.
+        """
+
+        if self.message_id is not None or not isinstance(payload, dict):
+            return
+        if payload.get("type") not in ("message", "response"):
+            return
+        body = payload.get("body")
+        if not isinstance(body, dict):
+            return
+        candidate = body.get("id")
+        if not isinstance(candidate, str):
+            return
+        normalized = candidate.strip()
+        if normalized and self._is_likely_conversation_id(normalized):
+            self.message_id = normalized
 
     def _capture_conversation_id_candidate(self, value: object, is_explicit: bool = False) -> None:
         if not isinstance(value, str) or not is_explicit:

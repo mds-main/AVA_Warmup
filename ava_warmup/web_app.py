@@ -31,6 +31,7 @@ from flask import (
 )
 
 from .config import load_app_config, merge_config
+from .genesys_api import GenesysApiClient, GenesysApiError
 from .history import RunHistoryStore
 from .progress import ProgressEmitter
 from .runner import (
@@ -153,6 +154,29 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
     def _suite_project_root() -> Path:
         return Path(app.config.get("warmup_suites_project_root") or project_root)
 
+    def _get_or_build_genesys_api_client(
+        region: str, client_id: str, client_secret: str
+    ) -> GenesysApiClient:
+        """Return a per-(region, credential) cached Genesys API client.
+
+        Genesys access tokens are region-specific (``login.{region}``) and
+        the client caches the bearer token, so we want one client instance
+        per region for the lifetime of the app process.
+        """
+
+        cache = app.config.setdefault("genesys_api_clients", {})
+        key = (region, client_id)
+        existing = cache.get(key)
+        if isinstance(existing, GenesysApiClient) and existing.client_secret == client_secret:
+            return existing
+        client = GenesysApiClient(
+            client_id=client_id,
+            client_secret=client_secret,
+            region=region,
+        )
+        cache[key] = client
+        return client
+
     def _resolve_suite_with_config(
         suite_id: str | None,
         *,
@@ -245,6 +269,10 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
                 "success_threshold": config.success_threshold,
                 "default_attempt_count": getattr(config, "default_attempt_count", MODEL_WARMUP_DEFAULT_ATTEMPTS),
                 "default_message": getattr(config, "default_message", "no help needed"),
+                "genesys_oauth_configured": bool(
+                    (getattr(config, "genesys_oauth_client_id", "") or "").strip()
+                    and (getattr(config, "genesys_oauth_client_secret", "") or "").strip()
+                ),
                 "default_execution_mode": getattr(config, "default_execution_mode", "serial"),
                 "default_worker_count": getattr(config, "default_worker_count", 1),
                 "default_pacing_seconds": float(getattr(config, "default_pacing_seconds", 1.0)),
@@ -1459,6 +1487,51 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
                 "progress": progress_history,
             }
         )
+
+    @app.route("/genesys/conversation_lookup", methods=["GET"])
+    def lookup_genesys_conversation():
+        """Translate a Web Messaging messageId into a Genesys conversationId.
+
+        Uses OAuth client-credentials (env-configured) against
+        ``GET /api/v2/conversations/messages/{messageId}/details``. Returns
+        ``{"ok": false, "error": "..."}`` with a useful diagnostic when the
+        operator hasn't configured credentials, so the UI can render a hint.
+        """
+
+        message_id = str(request.args.get("message_id") or "").strip()
+        region = str(request.args.get("region") or "").strip()
+        if not message_id:
+            return jsonify({"ok": False, "error": "message_id is required."}), 400
+        cfg: AppConfig = app.config["app_config"]
+        client_id = (cfg.genesys_oauth_client_id or "").strip()
+        client_secret = (cfg.genesys_oauth_client_secret or "").strip()
+        if not client_id or not client_secret:
+            return jsonify({
+                "ok": False,
+                "error": (
+                    "Set AVA_WARMUP_GENESYS_OAUTH_CLIENT_ID and "
+                    "AVA_WARMUP_GENESYS_OAUTH_CLIENT_SECRET to enable "
+                    "conversationId lookup via the Genesys Conversations API."
+                ),
+                "configured": False,
+            }), 200
+        target_region = region or (cfg.gc_region or "").strip() or "mypurecloud.com"
+        client = _get_or_build_genesys_api_client(target_region, client_id, client_secret)
+        try:
+            result = client.get_conversation_id_for_message(message_id)
+        except GenesysApiError as exc:
+            return jsonify({
+                "ok": False,
+                "error": str(exc),
+                "configured": True,
+            }), 200
+        return jsonify({
+            "ok": True,
+            "configured": True,
+            "conversation_id": result.get("conversation_id"),
+            "message_id": message_id,
+            "region": target_region,
+        })
 
     @app.route("/run/model_warm_up/schedule", methods=["POST"])
     def save_model_warmup_schedule():

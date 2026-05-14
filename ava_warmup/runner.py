@@ -344,6 +344,7 @@ class ModelWarmUpRunner:
                 conversation_id=getattr(client, "conversation_id", None),
                 participant_id=getattr(client, "participant_id", None),
                 session_token=getattr(client, "_token", None),
+                message_id=getattr(client, "message_id", None),
                 conversation_id_candidates=(
                     client.get_conversation_id_candidates()
                     if hasattr(client, "get_conversation_id_candidates")

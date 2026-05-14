@@ -105,6 +105,8 @@ def load_app_config() -> AppConfig:
         admin_user=_env_optional_str("ADMIN_USER"),
         admin_password=_env_optional_str("ADMIN_PASSWORD"),
         session_secret_key=_env_optional_str("SESSION_SECRET_KEY"),
+        genesys_oauth_client_id=_env_optional_str("AVA_WARMUP_GENESYS_OAUTH_CLIENT_ID"),
+        genesys_oauth_client_secret=_env_optional_str("AVA_WARMUP_GENESYS_OAUTH_CLIENT_SECRET"),
     )
 
 
