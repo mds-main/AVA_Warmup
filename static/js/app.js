@@ -1146,13 +1146,13 @@
         }).join('')
       + '</div></div>'
       + (cfg.execution_mode === 'parallel'
-        ? '<div class="field"><label class="field__lbl">Parallel workers</label><div style="display:flex;gap:6px">'
-          + [1,2,3,4,5].map(function (n) {
+        ? '<div class="field"><label class="field__lbl">Parallel workers</label><div style="display:flex;gap:6px;flex-wrap:wrap">'
+          + [1,2,3,4,5,6,7,8,9,10].map(function (n) {
               return '<button class="btn btn--sm" data-cfg="worker_count" data-value="' + n + '" style="min-width:36px;'
                 + (cfg.worker_count === n ? 'background:var(--amber-soft);color:var(--amber);border-color:oklch(60% 0.16 60 / 0.4)' : '')
                 + '">' + n + '</button>';
             }).join('')
-          + '</div><span class="field__hint">Max 5. Adaptive profile may reduce live.</span></div>'
+          + '</div><span class="field__hint">Max 10. Adaptive profile may reduce live.</span></div>'
         : '')
       + '<div class="row">'
       + '<div class="field"><label class="field__lbl">Pacing</label><div class="seg">'

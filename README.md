@@ -156,7 +156,7 @@ Required only when the feature in the right column is used.
 | --- | --- | --- |
 | `AVA_WARMUP_DEFAULT_ATTEMPT_COUNT` | `228` | Attempts per run. Must be ≥ 1. |
 | `AVA_WARMUP_DEFAULT_EXECUTION_MODE` | `serial` | `serial` or `parallel`. |
-| `AVA_WARMUP_DEFAULT_WORKER_COUNT` | `1` | Parallel workers, clamped `1..5`. |
+| `AVA_WARMUP_DEFAULT_WORKER_COUNT` | `1` | Parallel workers, clamped `1..10`. |
 | `AVA_WARMUP_DEFAULT_PACING_SECONDS` | `1.0` | Must be one of `0.5`, `1.0`, `2.5`, `5.0`, `7.5`. |
 | `AVA_WARMUP_DEFAULT_PERFORMANCE_PROFILE` | `safe_adaptive` | Only `safe_adaptive` is supported. |
 

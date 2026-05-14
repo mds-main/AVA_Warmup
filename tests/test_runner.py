@@ -103,7 +103,7 @@ def test_model_warmup_metadata_uses_configurable_attempt_count():
 
     assert MODEL_WARMUP_DEFAULT_ATTEMPTS == 228
     assert metadata.planned_attempts == 42
-    assert metadata.worker_count == 5
+    assert metadata.worker_count == 9
     assert metadata.performance_profile == "safe_adaptive"
     assert metadata.pacing_seconds == 1.0
     assert metadata.fixed_message == MODEL_WARMUP_FIXED_MESSAGE

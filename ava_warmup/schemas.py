@@ -70,7 +70,7 @@ class AppConfig(BaseModel):
     @classmethod
     def clamp_default_worker_count(cls, value: int) -> int:
         parsed = int(value)
-        return max(1, min(parsed, 5))
+        return max(1, min(parsed, 10))
 
     @field_validator("default_minute")
     @classmethod
@@ -292,8 +292,8 @@ class ModelWarmupRunMetadata(BaseModel):
         parsed = int(value)
         if parsed < 1:
             return 1
-        if parsed > 5:
-            return 5
+        if parsed > 10:
+            return 10
         return parsed
 
     @field_validator("pacing_seconds")

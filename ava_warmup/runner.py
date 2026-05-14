@@ -76,7 +76,7 @@ def normalize_model_warmup_workers(value: int | str) -> int:
         parsed = int(value)
     except (TypeError, ValueError):
         raise ValueError("AVA Spec Warm Up parallel workers must be a number.") from None
-    return max(1, min(parsed, 5))
+    return max(1, min(parsed, 10))
 
 
 def normalize_model_warmup_attempt_count(value: int | str) -> int:
