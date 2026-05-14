@@ -61,7 +61,7 @@ Start the web app:
 python3 -m ava_warmup
 ```
 
-Open `http://localhost:5000`. The app runs on `0.0.0.0:5000` with Flask debug mode disabled.
+Open `http://localhost:8080`. The app binds to `0.0.0.0` and uses the `PORT` env var (or `AVA_WARMUP_PORT`, default `8080`) so the same entrypoint runs locally and on PaaS hosts. Flask debug mode is disabled. For production use gunicorn (see the Deployment section); the bare `python -m ava_warmup` command uses the Flask dev server and is for local use only.
 
 ## Running A Warm-Up
 
@@ -126,31 +126,129 @@ By default, local data is written to `.ava_warmup_history/`.
 
 History retention defaults to `50` runs. The newest `20` reports stay as full JSON, the next `20` are compressed as gzip JSON, and older retained entries become summary-only. The checked-in `warmup_suites/` directory is suite configuration, not run history. Do not commit `.ava_warmup_history/`, `.env`, `config.yaml`, deployment IDs, raw transcripts, or customer conversation artifacts.
 
-## Configuration
+## Environment Variables
 
-The form can supply deployment and region at run time. Environment variables can set defaults and tune runtime behavior:
+All configuration is environment-driven. The form pre-fills from env, and (when auto-schedule is enabled) the persistent schedule is reapplied from env on every app boot.
 
-- `AVA_WARMUP_DEPLOYMENT_ID`: default Web Messaging deployment ID. Compatibility alias: `GC_DEPLOYMENT_ID`.
-- `AVA_WARMUP_REGION`: default Genesys Cloud region, for example `mypurecloud.com` or `usw2.pure.cloud`. Compatibility alias: `GC_REGION`.
-- `AVA_WARMUP_RESPONSE_TIMEOUT`: per-stage Web Messaging timeout in seconds. Default: `90`.
-- `AVA_WARMUP_SUCCESS_THRESHOLD`: regression threshold for completion rate, clamped to `0.0..1.0`. Default: `0.8`.
-- `AVA_WARMUP_PERFORMANCE_DIAGNOSTICS_ENABLED`: include compact performance diagnostics. Default: `true`.
-- `AVA_WARMUP_DEBUG_CAPTURE_FRAMES`: capture debug WebSocket frames on attempts. Default: `false`.
-- `AVA_WARMUP_DEBUG_FRAME_LIMIT`: maximum debug frames per attempt. Default: `8`.
-- `AVA_WARMUP_HISTORY_DIR`: local run and schedule history directory. Default: `.ava_warmup_history`.
-- `GC_TESTER_HISTORY_DIR`: compatibility fallback for the history directory when `AVA_WARMUP_HISTORY_DIR` is unset.
-- `AVA_WARMUP_HISTORY_MAX_RUNS`: maximum retained history entries. Default: `50`.
-- `AVA_WARMUP_HISTORY_FULL_JSON_RUNS`: newest reports kept as full JSON. Default: `20`.
-- `AVA_WARMUP_HISTORY_GZIP_RUNS`: additional reports kept as gzip JSON before summary-only compaction. Default: `20`.
+### Mandatory
 
-Example:
+The app will not serve any request (other than `/healthz`, `/login`, `/logout`, and static assets) until **both** of these are set. Until then, every request returns `503 Authentication is not configured`. Credentials are compared with `hmac.compare_digest` (constant time), and a successful login stores `authenticated=True` plus the username in the Flask session.
+
+| Variable | Purpose |
+| --- | --- |
+| `ADMIN_USER` | Login username for the web UI. Must be set together with `ADMIN_PASSWORD`. |
+| `ADMIN_PASSWORD` | Login password for the web UI. Must be set together with `ADMIN_USER`. |
+
+### Conditionally mandatory
+
+Required only when the feature in the right column is used.
+
+| Variable | Required when | Purpose |
+| --- | --- | --- |
+| `AVA_WARMUP_DEPLOYMENT_ID` *(alias `GC_DEPLOYMENT_ID`)* | Running a warm-up without typing it in the form, or when `AVA_WARMUP_AUTO_SCHEDULE_ENABLED=true`. | Genesys Cloud Web Messaging deployment ID. |
+| `AVA_WARMUP_REGION` *(alias `GC_REGION`)* | Same as above. | Genesys Cloud region, e.g. `mypurecloud.com` or `usw2.pure.cloud`. |
+| `AVA_WARMUP_DEFAULT_SCHEDULE_END_DATE` | `AVA_WARMUP_AUTO_SCHEDULE_ENABLED=true`. | `YYYY-MM-DD` end date for the auto-bootstrapped schedule. |
+
+### Optional — Run defaults
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `AVA_WARMUP_DEFAULT_ATTEMPT_COUNT` | `228` | Attempts per run. Must be ≥ 1. |
+| `AVA_WARMUP_DEFAULT_EXECUTION_MODE` | `serial` | `serial` or `parallel`. |
+| `AVA_WARMUP_DEFAULT_WORKER_COUNT` | `1` | Parallel workers, clamped `1..5`. |
+| `AVA_WARMUP_DEFAULT_PACING_SECONDS` | `1.0` | Must be one of `0.5`, `1.0`, `2.5`, `5.0`, `7.5`. |
+| `AVA_WARMUP_DEFAULT_PERFORMANCE_PROFILE` | `safe_adaptive` | Only `safe_adaptive` is supported. |
+
+### Optional — Schedule defaults
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `AVA_WARMUP_DEFAULT_CADENCE` | `hourly` | `hourly`, `daily`, `weekly`, or `monthly`. |
+| `AVA_WARMUP_DEFAULT_MINUTE` | `0` | Minute (`0..59`) for `hourly`. |
+| `AVA_WARMUP_DEFAULT_TIME_HHMM` | `02:00` | `HH:MM` local time for `daily`/`weekly`/`monthly`. |
+| `AVA_WARMUP_DEFAULT_WEEKDAY` | `0` | `0=Mon` .. `6=Sun` for `weekly`. |
+| `AVA_WARMUP_DEFAULT_DAY_OF_MONTH` | `1` | `1..31` for `monthly`. |
+| `AVA_WARMUP_DEFAULT_TIMEZONE` | `UTC` | IANA timezone, e.g. `America/New_York`. |
+| `AVA_WARMUP_DEFAULT_SCHEDULE_START_DATE` | _(empty)_ | Optional `YYYY-MM-DD` start date. |
+| `AVA_WARMUP_AUTO_SCHEDULE_ENABLED` | `false` | When `true`, the persistent schedule is (re)written from env on every boot. Required for ephemeral filesystems like DigitalOcean App Platform. |
+
+### Optional — Runtime, auth, and storage
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `PORT` | `8080` | HTTP port. App Platform/Heroku set this automatically. Wins over `AVA_WARMUP_PORT`. |
+| `AVA_WARMUP_PORT` | `8080` | Fallback port when `PORT` is unset. |
+| `HOST` | `0.0.0.0` | Bind address. Wins over `AVA_WARMUP_HOST`. |
+| `AVA_WARMUP_HOST` | `0.0.0.0` | Fallback bind address when `HOST` is unset. |
+| `SESSION_SECRET_KEY` | _(derived)_ | Flask session-cookie signing key. Resolution order: (1) use this value if set; (2) otherwise, if `ADMIN_PASSWORD` is set, derive `sha256("ava-warmup-session::<ADMIN_USER>::<ADMIN_PASSWORD>")` so sessions survive restarts as long as the password is unchanged; (3) otherwise a random per-process key (any restart invalidates all sessions). Set this explicitly in production — it lets you rotate `ADMIN_PASSWORD` without logging every user out, and keeps the signing key out of any password-rotation flow. |
+| `AVA_WARMUP_RESPONSE_TIMEOUT` | `90` | Per-stage Web Messaging timeout in seconds. |
+| `AVA_WARMUP_SUCCESS_THRESHOLD` | `0.8` | Regression threshold for completion rate; clamped to `0.0..1.0`. |
+| `AVA_WARMUP_PERFORMANCE_DIAGNOSTICS_ENABLED` | `true` | Include compact performance diagnostics in reports. |
+| `AVA_WARMUP_DEBUG_CAPTURE_FRAMES` | `false` | Capture debug WebSocket frames per attempt. |
+| `AVA_WARMUP_DEBUG_FRAME_LIMIT` | `8` | Maximum debug frames per attempt. |
+| `AVA_WARMUP_HISTORY_DIR` | `.ava_warmup_history` | Local run and schedule history directory. |
+| `AVA_WARMUP_USE_TMP_HISTORY` | `false` | When `true` and `AVA_WARMUP_HISTORY_DIR` is unset, store history under `/tmp/ava_warmup_history`. Recommended for App Platform. |
+| `GC_TESTER_HISTORY_DIR` | _(unset)_ | Compatibility fallback for `AVA_WARMUP_HISTORY_DIR`. |
+| `AVA_WARMUP_HISTORY_MAX_RUNS` | `50` | Maximum retained history entries. |
+| `AVA_WARMUP_HISTORY_FULL_JSON_RUNS` | `20` | Newest reports kept as full JSON. |
+| `AVA_WARMUP_HISTORY_GZIP_RUNS` | `20` | Additional reports kept as gzip JSON before summary-only compaction. |
+
+### Example
 
 ```bash
+# Mandatory
+export ADMIN_USER="admin"
+export ADMIN_PASSWORD="change-me"
+
+# Genesys Cloud target (mandatory in practice)
 export AVA_WARMUP_DEPLOYMENT_ID="your-deployment-id"
 export AVA_WARMUP_REGION="mypurecloud.com"
-export AVA_WARMUP_HISTORY_DIR=".ava_warmup_history"
+
+# Override the "228 every hour" defaults if needed
+export AVA_WARMUP_DEFAULT_ATTEMPT_COUNT=228
+export AVA_WARMUP_DEFAULT_CADENCE=hourly
+export AVA_WARMUP_DEFAULT_MINUTE=0
+
 python3 -m ava_warmup
 ```
+
+## Deploying to DigitalOcean App Platform
+
+This repo ships with the deployment artifacts App Platform looks for:
+
+- `requirements.txt`: pinned dependencies, including `gunicorn`.
+- `runtime.txt`: pins Python `3.11.9`.
+- `Procfile`: production launch command using gunicorn.
+- `.do/app.yaml`: full app spec with env vars, health check, and instance sizing.
+
+Two ways to deploy:
+
+1. **Control panel** — Create a new app, point it at your fork of this repo, then under *Settings → Edit App Spec* paste in `.do/app.yaml` (or let App Platform autodetect from `Procfile` + `runtime.txt`).
+2. **doctl** — `doctl apps create --spec .do/app.yaml` (then `doctl apps update <app-id> --spec .do/app.yaml` for changes).
+
+After the first deploy, set these env vars in the App Platform UI (or edit them in `.do/app.yaml`). See [Environment Variables](#environment-variables) above for the full table.
+
+Mandatory:
+
+- `ADMIN_USER` — login username for the web UI (mark the env var as a *secret* in the UI).
+- `ADMIN_PASSWORD` — login password for the web UI (mark as *secret*).
+- `AVA_WARMUP_DEPLOYMENT_ID` — your Genesys Cloud Web Messaging deployment ID.
+- `AVA_WARMUP_REGION` — e.g. `mypurecloud.com`.
+
+For auto-bootstrap of the persistent schedule:
+
+- `AVA_WARMUP_DEFAULT_SCHEDULE_END_DATE` — e.g. `2099-12-31`.
+- `AVA_WARMUP_AUTO_SCHEDULE_ENABLED=true` — so the schedule is re-applied from env on every boot.
+
+Recommended:
+
+- `SESSION_SECRET_KEY` — a long random string, marked as *secret*. Keeps sessions valid across deploys when `ADMIN_PASSWORD` rotates.
+
+**Why one instance and one gunicorn worker?** The scheduler runs as a daemon thread inside the worker process and active run state lives in Flask `app.config` (in-memory). Multiple workers or instances would fire each scheduled run multiple times and split run state. We use threads (`--threads 8`) for HTTP concurrency within the single worker instead.
+
+**Ephemeral storage.** App Platform containers do not have persistent disk. Run history (`.ava_warmup_history/` by default, `/tmp/ava_warmup_history` when `AVA_WARMUP_USE_TMP_HISTORY=true`) and the saved schedule do not survive redeploys. With `AVA_WARMUP_AUTO_SCHEDULE_ENABLED=true` the schedule is reapplied from env on every boot, so an hourly warm-up resumes automatically after a redeploy. To persist history long-term, forward run reports to external storage (e.g. download via `/results/export?format=json`).
+
+**Playwright PNG export.** The default Python buildpack does not include Chromium. PNG export will fail on App Platform unless you switch to a Dockerfile-based deploy that installs Chromium and runs `python -m playwright install chromium` during build. JSON and CSV exports work out of the box.
 
 ## HTTP API
 

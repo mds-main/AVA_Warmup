@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
+import hmac
 import io
+import json
 import secrets
 import threading
 from collections import Counter
@@ -12,7 +15,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from flask import (
     Flask,
@@ -23,6 +26,7 @@ from flask import (
     render_template,
     request,
     send_file,
+    session,
     url_for,
 )
 
@@ -88,9 +92,16 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
         template_folder=str(project_root / "templates"),
         static_folder=str(project_root / "static"),
     )
-    app.secret_key = secrets.token_hex(16)
 
     base_config = config or load_app_config()
+    if base_config.session_secret_key:
+        app.secret_key = base_config.session_secret_key
+    elif base_config.admin_password:
+        app.secret_key = hashlib.sha256(
+            f"ava-warmup-session::{base_config.admin_user or ''}::{base_config.admin_password}".encode("utf-8")
+        ).hexdigest()
+    else:
+        app.secret_key = secrets.token_hex(32)
     history_store = RunHistoryStore(
         history_dir=base_config.history_dir,
         max_runs=base_config.history_max_runs,
@@ -144,24 +155,206 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
         selected = selected_suite_id or DEFAULT_WARMUP_SUITE_ID
         if not any(suite.suite_id == selected for suite in suites):
             selected = DEFAULT_WARMUP_SUITE_ID
+        selected_suite_spec = next(
+            (s for s in suites if s.suite_id == selected),
+            DEFAULT_WARMUP_SUITE,
+        )
         return {
             "warmup_suites": suites,
             "warmup_suite_errors": suite_errors,
             "selected_suite_id": selected,
+            "selected_suite": selected_suite_spec,
         }
 
-    def _render_home(status_code: int = 200, *, errors: list[str] | None = None, selected_suite_id: str | None = None):
-        context = _available_suite_context(selected_suite_id)
-        return render_template(
-            "home.html",
-            config=app.config["app_config"],
+    _REGION_CHOICES = [
+        "mypurecloud.com",
+        "mypurecloud.ie",
+        "mypurecloud.de",
+        "mypurecloud.com.au",
+        "mypurecloud.jp",
+        "apne2.pure.cloud",
+        "usw2.pure.cloud",
+        "use2.pure.cloud",
+        "cac1.pure.cloud",
+        "sae1.pure.cloud",
+    ]
+
+    def _serialize_for_bootstrap(value: Any) -> Any:
+        """Convert Pydantic / dataclass / datetime values into JSON-safe types."""
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json")
+        if hasattr(value, "to_dict") and callable(getattr(value, "to_dict")):
+            return value.to_dict()
+        if isinstance(value, dict):
+            return {str(k): _serialize_for_bootstrap(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [_serialize_for_bootstrap(item) for item in value]
+        return str(value)
+
+    def _build_bootstrap_payload(
+        *,
+        config: "AppConfig",
+        report: Optional["TestReport"],
+        warmup_metadata: Optional["ModelWarmupRunMetadata"],
+        progress_history: list,
+        live_progress: Optional[dict[str, Any]],
+        history: list[dict[str, Any]],
+        schedule_status: dict[str, Any],
+        suites: list,
+        suite_errors: list[str],
+        selected_suite_id: str,
+        failure_summaries: list[dict[str, Any]],
+        run_active: bool,
+        stop_requested: bool,
+        active_run_id: Optional[str],
+        trigger_source: Optional[str],
+        viewing_history_run_id: Optional[str],
+        errors: list[str],
+    ) -> dict[str, Any]:
+        return {
+            "config": {
+                "gc_region": config.gc_region,
+                "gc_deployment_id": config.gc_deployment_id,
+                "response_timeout": config.response_timeout,
+                "success_threshold": config.success_threshold,
+                "default_attempt_count": getattr(config, "default_attempt_count", MODEL_WARMUP_DEFAULT_ATTEMPTS),
+                "default_execution_mode": getattr(config, "default_execution_mode", "serial"),
+                "default_worker_count": getattr(config, "default_worker_count", 1),
+                "default_pacing_seconds": float(getattr(config, "default_pacing_seconds", 1.0)),
+                "default_performance_profile": getattr(config, "default_performance_profile", "safe_adaptive"),
+                "default_cadence": getattr(config, "default_cadence", "daily"),
+                "default_minute": getattr(config, "default_minute", 0),
+                "default_time_hhmm": getattr(config, "default_time_hhmm", "02:00"),
+                "default_weekday": getattr(config, "default_weekday", 0),
+                "default_day_of_month": getattr(config, "default_day_of_month", 1),
+                "default_timezone": getattr(config, "default_timezone", "UTC"),
+                "default_schedule_start_date": getattr(config, "default_schedule_start_date", "") or "",
+                "default_schedule_end_date": getattr(config, "default_schedule_end_date", "") or "",
+            },
+            "regions": list(_REGION_CHOICES),
+            "suites": [s.to_dict() for s in suites],
+            "suite_errors": list(suite_errors),
+            "selected_suite_id": selected_suite_id,
+            "pacing_choices": sorted(MODEL_WARMUP_PACING_CHOICES),
+            "default_attempts": getattr(config, "default_attempt_count", MODEL_WARMUP_DEFAULT_ATTEMPTS),
+            "fixed_message": MODEL_WARMUP_FIXED_MESSAGE,
+            "run_active": bool(run_active),
+            "stop_requested": bool(stop_requested),
+            "active_run_id": active_run_id,
+            "trigger_source": trigger_source,
+            "warmup": _serialize_for_bootstrap(warmup_metadata),
+            "report": _serialize_for_bootstrap(report),
+            "live_progress": live_progress or {},
+            "progress_events": _serialize_for_bootstrap(progress_history),
+            "history": _serialize_for_bootstrap(history),
+            "schedule_status": _serialize_for_bootstrap(schedule_status),
+            "failure_summaries": list(failure_summaries),
+            "viewing_history_run_id": viewing_history_run_id,
+            "errors": list(errors),
+        }
+
+    def _render_mission_control(
+        *,
+        status_code: int = 200,
+        errors: list[str] | None = None,
+        selected_suite_id: str | None = None,
+        report: Optional["TestReport"] = None,
+        run_active: Optional[bool] = None,
+        stop_requested: Optional[bool] = None,
+        progress_history_override: Optional[list] = None,
+        viewing_history_run_id: Optional[str] = None,
+        active_nav: str = "cockpit",
+        capture_mode: bool = False,
+    ):
+        suite_ctx = _available_suite_context(selected_suite_id)
+        current_config: AppConfig = app.config["app_config"]
+        schedule_status = _schedule_store().load()
+        app.config["model_warmup_schedule_status"] = schedule_status
+
+        is_run_active = bool(app.config.get("run_active", False)) if run_active is None else bool(run_active)
+        is_stop_requested = bool(app.config.get("stop_requested", False)) if stop_requested is None else bool(stop_requested)
+
+        progress_emitter = app.config.get("progress_emitter")
+        if progress_history_override is not None:
+            progress_history = progress_history_override
+        elif isinstance(progress_emitter, ProgressEmitter):
+            progress_history = [event.model_dump(mode="json") for event in progress_emitter.get_history(limit=200)]
+        else:
+            progress_history = []
+
+        history_rows = _build_model_warmup_history(limit=50)
+        warmup_metadata = (
+            report.model_warmup_run if (report and isinstance(report.model_warmup_run, ModelWarmupRunMetadata)) else None
+        )
+        if warmup_metadata is None:
+            active_meta = app.config.get("active_model_warmup_metadata")
+            if isinstance(active_meta, ModelWarmupRunMetadata):
+                warmup_metadata = active_meta
+
+        live_progress: Optional[dict[str, Any]] = None
+        if isinstance(progress_emitter, ProgressEmitter):
+            history_events = progress_emitter.get_history(limit=500)
+            live_progress = _build_live_progress_snapshot(history_events, warmup_metadata)
+
+        failure_summaries = _failure_summaries(report)
+
+        bootstrap = _build_bootstrap_payload(
+            config=current_config,
+            report=report,
+            warmup_metadata=warmup_metadata,
+            progress_history=progress_history,
+            live_progress=live_progress,
+            history=history_rows,
+            schedule_status=schedule_status,
+            suites=suite_ctx["warmup_suites"],
+            suite_errors=suite_ctx["warmup_suite_errors"],
+            selected_suite_id=suite_ctx["selected_suite_id"],
+            failure_summaries=failure_summaries,
+            run_active=is_run_active,
+            stop_requested=is_stop_requested,
+            active_run_id=app.config.get("active_run_id"),
+            trigger_source=app.config.get("active_trigger_source") or "manual",
+            viewing_history_run_id=viewing_history_run_id,
             errors=errors or [],
-            model_warmup_schedule_status=_schedule_store().load(),
-            fixed_message=MODEL_WARMUP_FIXED_MESSAGE,
-            default_attempts=MODEL_WARMUP_DEFAULT_ATTEMPTS,
+        )
+
+        return render_template(
+            "mission_control.html",
+            config=current_config,
+            errors=errors or [],
+            warmup_suites=suite_ctx["warmup_suites"],
+            warmup_suite_errors=suite_ctx["warmup_suite_errors"],
+            selected_suite_id=suite_ctx["selected_suite_id"],
+            selected_suite=suite_ctx["selected_suite"],
+            report=report,
+            warmup=warmup_metadata,
+            progress_history=progress_history,
+            failure_summaries=failure_summaries,
+            run_active=is_run_active,
+            stop_requested=is_stop_requested,
+            model_warmup_history=history_rows,
+            model_warmup_schedule_status=schedule_status,
+            viewing_history_run_id=viewing_history_run_id,
+            active_nav=active_nav,
+            capture_mode=capture_mode,
+            default_attempts=current_config.default_attempt_count,
             pacing_choices=sorted(MODEL_WARMUP_PACING_CHOICES),
-            **context,
+            fixed_message=MODEL_WARMUP_FIXED_MESSAGE,
+            bootstrap_json=json.dumps(bootstrap, default=str),
         ), status_code
+
+    def _render_home(status_code: int = 200, *, errors: list[str] | None = None, selected_suite_id: str | None = None):
+        return _render_mission_control(
+            status_code=status_code,
+            errors=errors,
+            selected_suite_id=selected_suite_id,
+            report=None,
+            active_nav="cockpit",
+        )
 
     def _history_store() -> RunHistoryStore:
         return app.config["history_store"]
@@ -532,6 +725,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
         return finalized_report
 
     def _parse_model_warmup_request(data: dict[str, Any]) -> tuple[Optional[ModelWarmUpRunRequest], list[str]]:
+        current_config: AppConfig = app.config["app_config"]
         deployment_id = str(_field(data, "model_warmup_deployment_id", "deployment_id", default="")).strip()
         region = str(_field(data, "model_warmup_region", "region", default="")).strip()
         recorded_model = str(_field(data, "model_warmup_llm_model", "recorded_model", default="")).strip()
@@ -539,31 +733,31 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             data,
             "model_warmup_attempt_count",
             "attempt_count",
-            default=str(MODEL_WARMUP_DEFAULT_ATTEMPTS),
+            default=str(current_config.default_attempt_count),
         )
         execution_mode_raw = _field(
             data,
             "model_warmup_execution_mode",
             "execution_mode",
-            default="serial",
+            default=current_config.default_execution_mode,
         )
         worker_count_raw = _field(
             data,
             "model_warmup_parallel_workers",
             "worker_count",
-            default="1",
+            default=str(current_config.default_worker_count),
         )
         pacing_raw = _field(
             data,
             "model_warmup_pacing_seconds",
             "pacing_seconds",
-            default="1.0",
+            default=str(current_config.default_pacing_seconds),
         )
         performance_profile_raw = _field(
             data,
             "model_warmup_performance_profile",
             "performance_profile",
-            default="safe_adaptive",
+            default=current_config.default_performance_profile,
         )
         suite_id_raw = _field(
             data,
@@ -586,7 +780,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             attempt_count = normalize_model_warmup_attempt_count(attempt_count_raw)
         except ValueError as exc:
             errors.append(str(exc))
-            attempt_count = MODEL_WARMUP_DEFAULT_ATTEMPTS
+            attempt_count = current_config.default_attempt_count
         try:
             execution_mode = normalize_model_warmup_execution_mode(str(execution_mode_raw))
         except ValueError as exc:
@@ -603,7 +797,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             worker_count_unclamped = int(worker_count_raw)
         except (TypeError, ValueError):
             errors.append("AVA Spec Warm Up parallel workers must be a number.")
-            worker_count = 1
+            worker_count = current_config.default_worker_count
         else:
             if worker_count_unclamped < 1 or worker_count_unclamped > 5:
                 errors.append("AVA Spec Warm Up parallel workers must be between 1 and 5.")
@@ -612,7 +806,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             pacing_seconds = normalize_model_warmup_pacing(pacing_raw)
         except ValueError as exc:
             errors.append(str(exc))
-            pacing_seconds = 1.0
+            pacing_seconds = float(current_config.default_pacing_seconds)
 
         if errors:
             return None, errors
@@ -646,6 +840,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
         }
 
     def _model_warmup_request_from_dict(payload: dict[str, Any]) -> ModelWarmUpRunRequest:
+        current_config: AppConfig = app.config["app_config"]
         suite_payload = payload.get("suite_spec")
         if isinstance(suite_payload, dict):
             suite_spec = suite_from_request_payload(suite_payload)
@@ -657,17 +852,19 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             region=str(payload.get("region") or "").strip(),
             recorded_model=str(payload.get("recorded_model") or "").strip() or None,
             execution_mode=normalize_model_warmup_execution_mode(
-                str(payload.get("execution_mode") or "serial")
+                str(payload.get("execution_mode") or current_config.default_execution_mode)
             ),
-            worker_count=normalize_model_warmup_workers(payload.get("worker_count", 1)),
+            worker_count=normalize_model_warmup_workers(
+                payload.get("worker_count", current_config.default_worker_count)
+            ),
             pacing_seconds=normalize_model_warmup_pacing(
-                payload.get("pacing_seconds", 1.0)
+                payload.get("pacing_seconds", current_config.default_pacing_seconds)
             ),
             performance_profile=normalize_model_warmup_performance_profile(
-                str(payload.get("performance_profile") or "safe_adaptive")
+                str(payload.get("performance_profile") or current_config.default_performance_profile)
             ),
             attempt_count=normalize_model_warmup_attempt_count(
-                payload.get("attempt_count", MODEL_WARMUP_DEFAULT_ATTEMPTS)
+                payload.get("attempt_count", current_config.default_attempt_count)
             ),
             suite_spec=suite_spec,
         )
@@ -676,17 +873,28 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
         data: dict[str, Any],
         run_request: ModelWarmUpRunRequest,
     ) -> tuple[Optional[dict[str, Any]], list[str]]:
+        current_config: AppConfig = app.config["app_config"]
         errors: list[str] = []
         try:
             cadence = normalize_model_warmup_schedule_cadence(
-                _field(data, "model_warmup_schedule_cadence", "cadence", default="daily")
+                _field(
+                    data,
+                    "model_warmup_schedule_cadence",
+                    "cadence",
+                    default=current_config.default_cadence,
+                )
             )
         except ValueError as exc:
             errors.append(str(exc))
             cadence = "daily"
         try:
             timezone_name = validate_schedule_timezone_name(
-                _field(data, "model_warmup_schedule_timezone", "timezone_name", default="UTC")
+                _field(
+                    data,
+                    "model_warmup_schedule_timezone",
+                    "timezone_name",
+                    default=current_config.default_timezone,
+                )
             )
         except ValueError as exc:
             errors.append(str(exc))
@@ -699,8 +907,18 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
         }
         try:
             start_date, end_date = normalize_schedule_date_range(
-                start_date_value=_field(data, "model_warmup_schedule_start_date", "start_date", default=""),
-                end_date_value=_field(data, "model_warmup_schedule_end_date", "end_date", default=""),
+                start_date_value=_field(
+                    data,
+                    "model_warmup_schedule_start_date",
+                    "start_date",
+                    default=current_config.default_schedule_start_date or "",
+                ),
+                end_date_value=_field(
+                    data,
+                    "model_warmup_schedule_end_date",
+                    "end_date",
+                    default=current_config.default_schedule_end_date or "",
+                ),
                 timezone_name=timezone_name,
             )
             schedule["start_date"] = start_date
@@ -711,36 +929,56 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
         if cadence == "hourly":
             try:
                 schedule["minute"] = normalize_schedule_minute(
-                    _field(data, "model_warmup_schedule_minute", "minute", default="0")
+                    _field(
+                        data,
+                        "model_warmup_schedule_minute",
+                        "minute",
+                        default=str(current_config.default_minute),
+                    )
                 )
             except ValueError as exc:
                 errors.append(str(exc))
-                schedule["minute"] = 0
+                schedule["minute"] = current_config.default_minute
         else:
             try:
                 hour, minute = parse_schedule_hhmm(
-                    _field(data, "model_warmup_schedule_time", "time_hhmm", default="02:00")
+                    _field(
+                        data,
+                        "model_warmup_schedule_time",
+                        "time_hhmm",
+                        default=current_config.default_time_hhmm,
+                    )
                 )
                 schedule["time_hhmm"] = f"{hour:02d}:{minute:02d}"
             except ValueError as exc:
                 errors.append(str(exc))
-                schedule["time_hhmm"] = "02:00"
+                schedule["time_hhmm"] = current_config.default_time_hhmm
             if cadence == "weekly":
                 try:
                     schedule["weekday"] = normalize_schedule_weekday(
-                        _field(data, "model_warmup_schedule_weekday", "weekday", default="0")
+                        _field(
+                            data,
+                            "model_warmup_schedule_weekday",
+                            "weekday",
+                            default=str(current_config.default_weekday),
+                        )
                     )
                 except ValueError as exc:
                     errors.append(str(exc))
-                    schedule["weekday"] = 0
+                    schedule["weekday"] = current_config.default_weekday
             if cadence == "monthly":
                 try:
                     schedule["day_of_month"] = normalize_schedule_month_day(
-                        _field(data, "model_warmup_schedule_day_of_month", "day_of_month", default="1")
+                        _field(
+                            data,
+                            "model_warmup_schedule_day_of_month",
+                            "day_of_month",
+                            default=str(current_config.default_day_of_month),
+                        )
                     )
                 except ValueError as exc:
                     errors.append(str(exc))
-                    schedule["day_of_month"] = 1
+                    schedule["day_of_month"] = current_config.default_day_of_month
 
         if errors:
             return None, errors
@@ -912,7 +1150,175 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             scheduler.stop()
             app.config["model_warmup_scheduler"] = None
 
+    def _bootstrap_schedule_from_env() -> None:
+        """Apply an env-driven schedule on startup when auto-schedule is enabled.
+
+        Designed for DigitalOcean App Platform where the local filesystem is
+        ephemeral: a redeploy can wipe `model_warmup_schedule.json`, so we
+        re-create it from env every boot when `AVA_WARMUP_AUTO_SCHEDULE_ENABLED`
+        is true. This always overwrites the prior schedule with the env values,
+        which is the intended behavior for env-as-source-of-truth deploys.
+        """
+
+        current_config: AppConfig = app.config["app_config"]
+        if not current_config.auto_schedule_enabled:
+            return
+        deployment_id = (current_config.gc_deployment_id or "").strip()
+        region = (current_config.gc_region or "").strip()
+        if not deployment_id or not region:
+            return
+        if not current_config.default_schedule_end_date:
+            return
+        try:
+            suite_spec = resolve_suite(_suite_project_root(), DEFAULT_WARMUP_SUITE_ID)
+            run_request = ModelWarmUpRunRequest(
+                deployment_id=deployment_id,
+                region=region,
+                execution_mode=normalize_model_warmup_execution_mode(
+                    current_config.default_execution_mode
+                ),
+                worker_count=normalize_model_warmup_workers(
+                    current_config.default_worker_count
+                ),
+                pacing_seconds=normalize_model_warmup_pacing(
+                    current_config.default_pacing_seconds
+                ),
+                performance_profile=normalize_model_warmup_performance_profile(
+                    current_config.default_performance_profile
+                ),
+                attempt_count=normalize_model_warmup_attempt_count(
+                    current_config.default_attempt_count
+                ),
+                suite_spec=suite_spec,
+            )
+            cadence = normalize_model_warmup_schedule_cadence(
+                current_config.default_cadence
+            )
+            timezone_name = validate_schedule_timezone_name(
+                current_config.default_timezone
+            )
+            start_date, end_date = normalize_schedule_date_range(
+                start_date_value=current_config.default_schedule_start_date or "",
+                end_date_value=current_config.default_schedule_end_date,
+                timezone_name=timezone_name,
+            )
+            schedule_payload: dict[str, Any] = {
+                "cadence": cadence,
+                "timezone_name": timezone_name,
+                "start_date": start_date,
+                "end_date": end_date,
+                "run_request": _model_warmup_request_to_dict(run_request),
+            }
+            if cadence == "hourly":
+                schedule_payload["minute"] = normalize_schedule_minute(
+                    current_config.default_minute
+                )
+            else:
+                hour, minute = parse_schedule_hhmm(current_config.default_time_hhmm)
+                schedule_payload["time_hhmm"] = f"{hour:02d}:{minute:02d}"
+                if cadence == "weekly":
+                    schedule_payload["weekday"] = normalize_schedule_weekday(
+                        current_config.default_weekday
+                    )
+                if cadence == "monthly":
+                    schedule_payload["day_of_month"] = normalize_schedule_month_day(
+                        current_config.default_day_of_month
+                    )
+        except ValueError:
+            return
+        schedule_payload["schedule_label"] = model_warmup_schedule_label(schedule_payload)
+        app.config["model_warmup_schedule_status"] = _schedule_store().save_schedule(
+            schedule_payload
+        )
+
+    _bootstrap_schedule_from_env()
     ensure_model_warmup_scheduler_state()
+
+    _AUTH_EXEMPT_ENDPOINTS: set[str] = {"login", "logout", "static", "healthz"}
+
+    def _admin_credentials() -> tuple[Optional[str], Optional[str]]:
+        cfg: AppConfig = app.config["app_config"]
+        return cfg.admin_user, cfg.admin_password
+
+    def _auth_configured() -> bool:
+        user, password = _admin_credentials()
+        return bool(user and password)
+
+    def _is_authenticated() -> bool:
+        if not _auth_configured():
+            return False
+        user, _ = _admin_credentials()
+        return session.get("authenticated") is True and session.get("user") == user
+
+    def _safe_next_path(candidate: Optional[str]) -> Optional[str]:
+        if not candidate:
+            return None
+        parsed = urlparse(candidate)
+        if parsed.scheme or parsed.netloc:
+            return None
+        if not candidate.startswith("/"):
+            return None
+        if candidate.startswith("//"):
+            return None
+        return candidate
+
+    @app.before_request
+    def _require_login():
+        if not _auth_configured():
+            return (
+                "Authentication is not configured. "
+                "Set ADMIN_USER and ADMIN_PASSWORD environment variables.",
+                503,
+            )
+        endpoint = request.endpoint or ""
+        if endpoint in _AUTH_EXEMPT_ENDPOINTS:
+            return None
+        if _is_authenticated():
+            return None
+        if _wants_json():
+            return jsonify({"ok": False, "error": "Authentication required."}), 401
+        next_path = _safe_next_path(request.full_path if request.query_string else request.path)
+        return redirect(url_for("login", next=next_path) if next_path else url_for("login"))
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        if not _auth_configured():
+            return (
+                "Authentication is not configured. "
+                "Set ADMIN_USER and ADMIN_PASSWORD environment variables.",
+                503,
+            )
+        next_path = _safe_next_path(request.args.get("next") or request.form.get("next"))
+        if _is_authenticated():
+            return redirect(next_path or url_for("home"))
+
+        error: Optional[str] = None
+        if request.method == "POST":
+            submitted_user = (request.form.get("username") or "").strip()
+            submitted_password = request.form.get("password") or ""
+            admin_user, admin_password = _admin_credentials()
+            user_ok = hmac.compare_digest(submitted_user, admin_user or "")
+            password_ok = hmac.compare_digest(submitted_password, admin_password or "")
+            if user_ok and password_ok:
+                session.clear()
+                session["authenticated"] = True
+                session["user"] = admin_user
+                session.permanent = False
+                return redirect(next_path or url_for("home"))
+            error = "Invalid username or password."
+
+        return render_template("login.html", error=error, next_path=next_path or ""), (
+            401 if error else 200
+        )
+
+    @app.route("/logout", methods=["POST", "GET"])
+    def logout():
+        session.clear()
+        return redirect(url_for("login"))
+
+    @app.route("/healthz")
+    def healthz():
+        return jsonify({"ok": True})
 
     @app.route("/")
     def home():
@@ -1064,26 +1470,13 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             if report is not None:
                 history_run_id = latest_history_run_id
                 viewing_history_report = True
-        schedule_status = _schedule_store().load()
-        app.config["model_warmup_schedule_status"] = schedule_status
-        progress_emitter = app.config.get("progress_emitter")
-        progress_history = (
-            [event.model_dump(mode="json") for event in progress_emitter.get_history(limit=200)]
-            if isinstance(progress_emitter, ProgressEmitter)
-            else []
-        )
-        return render_template(
-            "results.html",
+        body, _status = _render_mission_control(
             report=report,
-            run_active=bool(app.config.get("run_active", False)),
-            stop_requested=bool(app.config.get("stop_requested", False)),
-            progress_history=progress_history,
-            failure_summaries=_failure_summaries(report),
-            capture_mode=request.args.get("screenshot") == "1",
             viewing_history_run_id=(history_run_id if viewing_history_report else None),
-            model_warmup_history=_build_model_warmup_history(),
-            model_warmup_schedule_status=schedule_status,
+            capture_mode=request.args.get("screenshot") == "1",
+            active_nav="cockpit",
         )
+        return body
 
     @app.route("/results/history")
     def results_history():
@@ -1219,4 +1612,5 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    _runtime_config = load_app_config()
+    app.run(host=_runtime_config.server_host, port=_runtime_config.server_port, debug=False)

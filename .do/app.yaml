@@ -1,0 +1,106 @@
+# DigitalOcean App Platform spec for AVA Spec Warm Up.
+#
+# Deploy via the control panel "Edit App Spec" option, or with doctl:
+#   doctl apps create --spec .do/app.yaml
+#   doctl apps update <app-id> --spec .do/app.yaml
+#
+# Notes:
+# - We pin `instance_count: 1` because the scheduler runs as an in-process
+#   daemon thread and active run state lives in Flask app config. Running more
+#   than one instance would duplicate scheduled fires and split run state.
+# - gunicorn uses 1 worker + 8 threads for the same reason. Threads handle
+#   concurrent HTTP requests within the single worker process.
+# - The local filesystem on App Platform is ephemeral. With
+#   AVA_WARMUP_AUTO_SCHEDULE_ENABLED=true the schedule is reapplied from env
+#   on every boot, so a redeploy automatically restores it. Set
+#   AVA_WARMUP_USE_TMP_HISTORY=true to redirect run history to /tmp.
+name: ava-spec-warmup
+region: nyc
+services:
+  - name: web
+    environment_slug: python
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    http_port: 8080
+    source_dir: /
+    # build_command is auto-detected from requirements.txt; left explicit for clarity.
+    build_command: pip install --upgrade pip && pip install -r requirements.txt
+    run_command: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 120 --access-logfile - --error-logfile - ava_warmup.web_app:app
+    health_check:
+      http_path: /
+      initial_delay_seconds: 10
+      period_seconds: 30
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    envs:
+      # --- Auth (MANDATORY — app returns 503 until both are set) ---
+      # Mark these as SECRET in the App Platform UI so they are not stored
+      # in plaintext in the spec.
+      - key: ADMIN_USER
+        scope: RUN_TIME
+        type: SECRET
+        value: ""
+      - key: ADMIN_PASSWORD
+        scope: RUN_TIME
+        type: SECRET
+        value: ""
+      # Optional: explicit session signing key. If omitted, derived
+      # deterministically from ADMIN_PASSWORD.
+      - key: SESSION_SECRET_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: ""
+
+      # --- Genesys Cloud target ---
+      - key: AVA_WARMUP_DEPLOYMENT_ID
+        scope: RUN_TIME
+        value: ""
+      - key: AVA_WARMUP_REGION
+        scope: RUN_TIME
+        value: "mypurecloud.com"
+
+      # --- Run defaults ("228 every 1 hour") ---
+      - key: AVA_WARMUP_DEFAULT_ATTEMPT_COUNT
+        scope: RUN_TIME
+        value: "228"
+      - key: AVA_WARMUP_DEFAULT_EXECUTION_MODE
+        scope: RUN_TIME
+        value: "serial"
+      - key: AVA_WARMUP_DEFAULT_WORKER_COUNT
+        scope: RUN_TIME
+        value: "1"
+      - key: AVA_WARMUP_DEFAULT_PACING_SECONDS
+        scope: RUN_TIME
+        value: "1.0"
+
+      # --- Schedule defaults ---
+      - key: AVA_WARMUP_DEFAULT_CADENCE
+        scope: RUN_TIME
+        value: "hourly"
+      - key: AVA_WARMUP_DEFAULT_MINUTE
+        scope: RUN_TIME
+        value: "0"
+      - key: AVA_WARMUP_DEFAULT_TIMEZONE
+        scope: RUN_TIME
+        value: "UTC"
+      - key: AVA_WARMUP_DEFAULT_SCHEDULE_START_DATE
+        scope: RUN_TIME
+        value: ""
+      - key: AVA_WARMUP_DEFAULT_SCHEDULE_END_DATE
+        scope: RUN_TIME
+        value: ""
+
+      # --- App Platform tuning ---
+      # When true, the persistent schedule is re-applied from env on every
+      # boot. Required for ephemeral filesystems on App Platform.
+      - key: AVA_WARMUP_AUTO_SCHEDULE_ENABLED
+        scope: RUN_TIME
+        value: "true"
+      # Redirect ephemeral run history to /tmp instead of the working dir.
+      - key: AVA_WARMUP_USE_TMP_HISTORY
+        scope: RUN_TIME
+        value: "true"
+      - key: PYTHONUNBUFFERED
+        scope: RUN_TIME
+        value: "1"

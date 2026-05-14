@@ -100,6 +100,18 @@ class _FakeWarmUpRunner:
         )
 
 
+TEST_ADMIN_USER = "admin"
+TEST_ADMIN_PASSWORD = "warmup-pass"
+
+
+def _login(client, username=TEST_ADMIN_USER, password=TEST_ADMIN_PASSWORD):
+    return client.post(
+        "/login",
+        data={"username": username, "password": password},
+        follow_redirects=False,
+    )
+
+
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr("ava_warmup.web_app.ModelWarmUpRunner", _FakeWarmUpRunner)
@@ -121,6 +133,8 @@ def app(tmp_path, monkeypatch):
             history_max_runs=10,
             history_full_json_runs=10,
             history_gzip_runs=0,
+            admin_user=TEST_ADMIN_USER,
+            admin_password=TEST_ADMIN_PASSWORD,
         )
     )
     flask_app.config["warmup_suites_project_root"] = tmp_path
@@ -129,6 +143,13 @@ def app(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(app):
+    test_client = app.test_client()
+    _login(test_client)
+    return test_client
+
+
+@pytest.fixture
+def anonymous_client(app):
     return app.test_client()
 
 
@@ -425,6 +446,104 @@ def test_run_status_derives_live_progress_snapshot(app, client):
     assert "Starting suite" in results_body
 
 
+def test_env_driven_defaults_flow_into_home_bootstrap(tmp_path, monkeypatch):
+    monkeypatch.setattr("ava_warmup.web_app.ModelWarmUpRunner", _FakeWarmUpRunner)
+    flask_app = create_app(
+        AppConfig(
+            history_dir=str(tmp_path),
+            history_max_runs=10,
+            history_full_json_runs=10,
+            history_gzip_runs=0,
+            default_attempt_count=42,
+            default_execution_mode="parallel",
+            default_worker_count=3,
+            default_pacing_seconds=2.5,
+            default_cadence="hourly",
+            default_minute=17,
+            default_timezone="America/New_York",
+            default_schedule_end_date="2099-01-31",
+            admin_user=TEST_ADMIN_USER,
+            admin_password=TEST_ADMIN_PASSWORD,
+        )
+    )
+    flask_app.config["warmup_suites_project_root"] = tmp_path
+
+    test_client = flask_app.test_client()
+    _login(test_client)
+    body = test_client.get("/").get_data(as_text=True)
+
+    assert '"default_attempt_count": 42' in body
+    assert '"default_execution_mode": "parallel"' in body
+    assert '"default_worker_count": 3' in body
+    assert '"default_pacing_seconds": 2.5' in body
+    assert '"default_cadence": "hourly"' in body
+    assert '"default_minute": 17' in body
+    assert '"default_timezone": "America/New_York"' in body
+    assert '"default_schedule_end_date": "2099-01-31"' in body
+
+
+def test_auto_schedule_bootstrap_writes_schedule_from_env(tmp_path, monkeypatch):
+    monkeypatch.setattr("ava_warmup.web_app.ModelWarmUpRunner", _FakeWarmUpRunner)
+    flask_app = create_app(
+        AppConfig(
+            history_dir=str(tmp_path),
+            history_max_runs=10,
+            history_full_json_runs=10,
+            history_gzip_runs=0,
+            gc_deployment_id="env-deploy-id",
+            gc_region="usw2.pure.cloud",
+            default_attempt_count=228,
+            default_cadence="hourly",
+            default_minute=0,
+            default_timezone="UTC",
+            default_schedule_end_date="2099-12-31",
+            auto_schedule_enabled=True,
+            admin_user=TEST_ADMIN_USER,
+            admin_password=TEST_ADMIN_PASSWORD,
+        )
+    )
+    flask_app.config["warmup_suites_project_root"] = tmp_path
+
+    test_client = flask_app.test_client()
+    _login(test_client)
+    status = test_client.get("/run/model_warm_up/schedule/status").get_json()
+
+    scheduled = status["scheduled_warmups"]
+    assert scheduled
+    assert scheduled[0]["enabled"] is True
+    assert scheduled[0]["cadence"] == "hourly"
+    assert scheduled[0]["status"] == "scheduled"
+    run_request = scheduled[0]["run_request"]
+    assert run_request["deployment_id"] == "env-deploy-id"
+    assert run_request["region"] == "usw2.pure.cloud"
+    assert run_request["attempt_count"] == 228
+
+
+def test_auto_schedule_bootstrap_disabled_leaves_no_schedule(tmp_path, monkeypatch):
+    monkeypatch.setattr("ava_warmup.web_app.ModelWarmUpRunner", _FakeWarmUpRunner)
+    flask_app = create_app(
+        AppConfig(
+            history_dir=str(tmp_path),
+            history_max_runs=10,
+            history_full_json_runs=10,
+            history_gzip_runs=0,
+            gc_deployment_id="env-deploy-id",
+            gc_region="usw2.pure.cloud",
+            default_schedule_end_date="2099-12-31",
+            auto_schedule_enabled=False,
+            admin_user=TEST_ADMIN_USER,
+            admin_password=TEST_ADMIN_PASSWORD,
+        )
+    )
+    flask_app.config["warmup_suites_project_root"] = tmp_path
+
+    test_client = flask_app.test_client()
+    _login(test_client)
+    status = test_client.get("/run/model_warm_up/schedule/status").get_json()
+
+    assert status.get("scheduled_warmups") == []
+
+
 def test_results_show_failure_diagnostics_and_csv_summary(app, client):
     failed_attempt = AttemptResult(
         attempt_number=1,
@@ -475,3 +594,129 @@ def test_results_show_failure_diagnostics_and_csv_summary(app, client):
     assert "python-socks" in results_body
     assert "failure_summary" in csv_body
     assert "python-socks" in csv_body
+
+
+def test_unauthenticated_home_redirects_to_login(anonymous_client):
+    response = anonymous_client.get("/", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
+
+
+def test_unauthenticated_protected_routes_redirect_to_login(anonymous_client):
+    for path in ("/results", "/results/history", "/run/model_warm_up/schedule/status"):
+        response = anonymous_client.get(path, follow_redirects=False)
+        assert response.status_code == 302, f"{path} should redirect when unauthenticated"
+        assert "/login" in response.headers["Location"]
+
+
+def test_unauthenticated_json_request_returns_401(anonymous_client):
+    response = anonymous_client.post(
+        "/run/model_warm_up",
+        json={"deployment_id": "deploy-123", "region": "usw2.pure.cloud"},
+    )
+
+    assert response.status_code == 401
+    assert response.get_json()["ok"] is False
+
+
+def test_login_get_renders_login_form(anonymous_client):
+    response = anonymous_client.get("/login")
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "Administrator sign in" in body
+    assert 'name="username"' in body
+    assert 'name="password"' in body
+
+
+def test_login_with_wrong_credentials_shows_error(anonymous_client):
+    response = anonymous_client.post(
+        "/login",
+        data={"username": TEST_ADMIN_USER, "password": "wrong"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 401
+    assert "Invalid username or password." in response.get_data(as_text=True)
+
+
+def test_login_with_valid_credentials_grants_access(anonymous_client):
+    response = _login(anonymous_client)
+
+    assert response.status_code == 302
+    assert "/login" not in response.headers["Location"]
+
+    home_response = anonymous_client.get("/")
+    assert home_response.status_code == 200
+    assert "AVA Spec Warm Up" in home_response.get_data(as_text=True)
+
+
+def test_login_redirects_to_safe_next_path(anonymous_client):
+    response = anonymous_client.post(
+        "/login",
+        data={
+            "username": TEST_ADMIN_USER,
+            "password": TEST_ADMIN_PASSWORD,
+            "next": "/results",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/results")
+
+
+def test_login_rejects_unsafe_next_path(anonymous_client):
+    response = anonymous_client.post(
+        "/login",
+        data={
+            "username": TEST_ADMIN_USER,
+            "password": TEST_ADMIN_PASSWORD,
+            "next": "https://evil.example.com/steal",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/")
+
+
+def test_logout_clears_session(client):
+    assert client.get("/").status_code == 200
+
+    logout_response = client.post("/logout", follow_redirects=False)
+    assert logout_response.status_code == 302
+    assert "/login" in logout_response.headers["Location"]
+
+    after_logout = client.get("/", follow_redirects=False)
+    assert after_logout.status_code == 302
+    assert "/login" in after_logout.headers["Location"]
+
+
+def test_static_assets_accessible_without_login(anonymous_client):
+    response = anonymous_client.get("/static/css/app.css")
+    assert response.status_code == 200
+
+
+def test_healthz_accessible_without_login(anonymous_client):
+    response = anonymous_client.get("/healthz")
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+
+
+def test_app_returns_503_when_admin_credentials_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr("ava_warmup.web_app.ModelWarmUpRunner", _FakeWarmUpRunner)
+    flask_app = create_app(
+        AppConfig(
+            history_dir=str(tmp_path),
+            history_max_runs=10,
+            history_full_json_runs=10,
+            history_gzip_runs=0,
+        )
+    )
+    flask_app.config["warmup_suites_project_root"] = tmp_path
+
+    response = flask_app.test_client().get("/")
+    assert response.status_code == 503
+    assert b"Authentication is not configured" in response.data

@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-density="normal">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AVA Spec Warm Up — Sign In</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+<style>
+  body.login-shell {
+    min-height: 100vh;
+    margin: 0;
+    display: grid;
+    place-items: center;
+    background:
+      radial-gradient(60% 60% at 50% 0%, var(--amber-soft), transparent 70%),
+      var(--bg);
+    font-family: var(--sans);
+    color: var(--fg);
+  }
+  .login-card {
+    width: min(420px, 92vw);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    padding: 32px 28px;
+    box-shadow: 0 20px 60px -20px rgba(0, 0, 0, 0.6);
+  }
+  .login-card__brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .login-card__logo {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, var(--amber), var(--ember));
+    box-shadow: 0 0 0 1px oklch(0% 0 0 / 0.4), 0 6px 16px -6px var(--amber-glow);
+    display: grid;
+    place-items: center;
+    color: oklch(15% 0.01 60);
+    font-weight: 800;
+    font-size: 18px;
+  }
+  .login-card__title {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+  .login-card__sub {
+    color: var(--fg-3);
+    font-size: 13px;
+    margin-top: 2px;
+  }
+  .login-form { display: grid; gap: 14px; }
+  .login-field { display: grid; gap: 6px; }
+  .login-field label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-3);
+    font-weight: 600;
+  }
+  .login-field input {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 14px;
+    padding: 10px 12px;
+    outline: none;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .login-field input:focus {
+    border-color: var(--amber);
+    box-shadow: 0 0 0 3px var(--amber-soft);
+  }
+  .login-submit {
+    margin-top: 6px;
+    background: linear-gradient(180deg, var(--amber), var(--ember));
+    color: oklch(15% 0.01 60);
+    border: 0;
+    border-radius: var(--r);
+    padding: 11px 14px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    letter-spacing: 0.01em;
+    box-shadow: 0 8px 20px -10px var(--amber-glow);
+  }
+  .login-submit:hover { filter: brightness(1.05); }
+  .login-error {
+    background: var(--err-soft);
+    border: 1px solid oklch(70% 0.19 25 / 0.4);
+    color: var(--fg);
+    padding: 10px 12px;
+    border-radius: var(--r);
+    font-size: 13px;
+  }
+  .login-foot {
+    margin-top: 18px;
+    color: var(--fg-4);
+    font-size: 12px;
+    text-align: center;
+  }
+</style>
+</head>
+<body class="login-shell">
+  <main class="login-card" role="main">
+    <div class="login-card__brand">
+      <div class="login-card__logo" aria-hidden="true">A</div>
+      <div>
+        <div class="login-card__title">AVA Spec Warm Up</div>
+        <div class="login-card__sub">Administrator sign in</div>
+      </div>
+    </div>
+
+    {% if error %}
+      <div class="login-error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form class="login-form" method="post" action="{{ url_for('login') }}" autocomplete="off">
+      {% if next_path %}<input type="hidden" name="next" value="{{ next_path }}">{% endif %}
+      <div class="login-field">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username" autofocus required>
+      </div>
+      <div class="login-field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="login-submit" type="submit">Sign in</button>
+    </form>
+
+    <div class="login-foot">Authorized personnel only.</div>
+  </main>
+</body>
+</html>

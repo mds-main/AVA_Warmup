@@ -23,8 +23,34 @@ class AppConfig(BaseModel):
     history_max_runs: int = 50
     history_full_json_runs: int = 20
     history_gzip_runs: int = 20
+    default_attempt_count: int = 228
+    default_execution_mode: str = "serial"
+    default_worker_count: int = 1
+    default_pacing_seconds: float = 1.0
+    default_performance_profile: str = "safe_adaptive"
+    default_cadence: str = "hourly"
+    default_minute: int = 0
+    default_time_hhmm: str = "02:00"
+    default_weekday: int = 0
+    default_day_of_month: int = 1
+    default_timezone: str = "UTC"
+    default_schedule_start_date: Optional[str] = None
+    default_schedule_end_date: Optional[str] = None
+    auto_schedule_enabled: bool = False
+    server_host: str = "0.0.0.0"
+    server_port: int = 8080
+    admin_user: Optional[str] = None
+    admin_password: Optional[str] = None
+    session_secret_key: Optional[str] = None
 
-    @field_validator("response_timeout", "history_max_runs", "history_full_json_runs", "history_gzip_runs")
+    @field_validator(
+        "response_timeout",
+        "history_max_runs",
+        "history_full_json_runs",
+        "history_gzip_runs",
+        "default_attempt_count",
+        "server_port",
+    )
     @classmethod
     def normalize_positive_int(cls, value: int) -> int:
         return max(1, int(value))
@@ -39,6 +65,30 @@ class AppConfig(BaseModel):
     @classmethod
     def normalize_debug_frame_limit(cls, value: int) -> int:
         return max(1, int(value))
+
+    @field_validator("default_worker_count")
+    @classmethod
+    def clamp_default_worker_count(cls, value: int) -> int:
+        parsed = int(value)
+        return max(1, min(parsed, 5))
+
+    @field_validator("default_minute")
+    @classmethod
+    def clamp_default_minute(cls, value: int) -> int:
+        parsed = int(value)
+        return max(0, min(parsed, 59))
+
+    @field_validator("default_weekday")
+    @classmethod
+    def clamp_default_weekday(cls, value: int) -> int:
+        parsed = int(value)
+        return max(0, min(parsed, 6))
+
+    @field_validator("default_day_of_month")
+    @classmethod
+    def clamp_default_day_of_month(cls, value: int) -> int:
+        parsed = int(value)
+        return max(1, min(parsed, 31))
 
 
 class MessageRole(str, Enum):
