@@ -1538,15 +1538,34 @@
     pollTimer = setInterval(function () {
       if (!state.runActive) {
         stopPolling();
+        stopDashboardReload();
         // Final refresh once to fetch the report
         refreshAll();
         return;
       }
       refreshAll();
     }, 1500);
+    startDashboardReload();
   }
   function stopPolling() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  // Full-page reload every 10s while a run is active, so the whole dashboard
+  // — including any bits not covered by incremental polling — stays fresh.
+  var dashboardReloadTimer = null;
+  function startDashboardReload() {
+    if (dashboardReloadTimer) return;
+    dashboardReloadTimer = setInterval(function () {
+      if (state.runActive) {
+        window.location.reload();
+      } else {
+        stopDashboardReload();
+      }
+    }, 10000);
+  }
+  function stopDashboardReload() {
+    if (dashboardReloadTimer) { clearInterval(dashboardReloadTimer); dashboardReloadTimer = null; }
   }
 
   // ----------------------------------------------------------------
