@@ -349,6 +349,11 @@ class ModelWarmUpRunner:
                     if hasattr(client, "get_conversation_id_candidates")
                     else []
                 ),
+                genesys_uuid_paths=(
+                    client.get_uuid_paths()
+                    if hasattr(client, "get_uuid_paths")
+                    else {}
+                ),
             )
 
         async def run_recorded_step(stage_prefix: str, message: str, awaitable):

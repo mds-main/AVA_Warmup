@@ -1303,33 +1303,69 @@
     var candidates = raw.conversation_id_candidates && raw.conversation_id_candidates.length
       ? raw.conversation_id_candidates
       : (td.conversation_id_candidates || []);
+    var uuidPaths = raw.genesys_uuid_paths || {};
     var runMeta = (state.warmup) || (state.report && state.report.model_warmup_run) || {};
     var deploymentId = runMeta.deployment_id || state.config.gc_deployment_id || '';
     var region = runMeta.region || state.config.gc_region || '';
 
-    function row(label, value, mono) {
+    // If we didn't capture an explicit conversationId, fall back to the first
+    // UUID we observed in any frame so the field is never empty when frames
+    // were received — the path next to it tells you what field it came from.
+    var inferredConversationId = null;
+    var inferredPath = null;
+    if (!conversationId) {
+      var uuidValues = Object.keys(uuidPaths);
+      if (uuidValues.length) {
+        inferredConversationId = uuidValues[0];
+        inferredPath = uuidPaths[inferredConversationId];
+      } else if (candidates.length) {
+        inferredConversationId = candidates[0];
+      }
+    }
+
+    function row(label, value, mono, hint) {
       if (value === null || value === undefined || value === '') return '';
       var cls = mono ? 'mono' : '';
+      var hintHtml = hint ? '<span class="genesys__hint">' + escapeHtml(hint) + '</span>' : '';
       return '<div class="genesys__row">'
         + '<div class="genesys__lbl">' + escapeHtml(label) + '</div>'
-        + '<div class="genesys__val ' + cls + '">' + escapeHtml(String(value)) + '</div>'
+        + '<div class="genesys__val ' + cls + '">' + escapeHtml(String(value)) + hintHtml + '</div>'
         + '</div>';
     }
 
-    var rows = ''
-      + row('conversationId (interactionId)', conversationId, true)
-      + row('participantId', participantId, true)
-      + row('sessionToken', sessionToken, true)
-      + row('deploymentId', deploymentId, true)
-      + row('region', region, false);
-    if (Array.isArray(candidates) && candidates.length) {
+    var rows = '';
+    if (conversationId) {
+      rows += row('conversationId (interactionId)', conversationId, true);
+    } else if (inferredConversationId) {
+      rows += row(
+        'conversationId (inferred)',
+        inferredConversationId,
+        true,
+        inferredPath ? 'from ' + inferredPath : 'from candidates'
+      );
+    }
+    rows += row('participantId', participantId, true);
+    rows += row('sessionToken', sessionToken, true);
+    rows += row('deploymentId', deploymentId, true);
+    rows += row('region', region, false);
+
+    var uuidEntries = Object.keys(uuidPaths);
+    if (uuidEntries.length) {
+      var pathList = uuidEntries.map(function (v) {
+        return '<div>' + escapeHtml(v) + ' <span class="genesys__hint">' + escapeHtml(uuidPaths[v]) + '</span></div>';
+      }).join('');
+      rows += '<div class="genesys__row">'
+        + '<div class="genesys__lbl">All UUIDs in frames</div>'
+        + '<div class="genesys__val mono">' + pathList + '</div>'
+        + '</div>';
+    } else if (Array.isArray(candidates) && candidates.length) {
       rows += '<div class="genesys__row">'
         + '<div class="genesys__lbl">conversationId candidates</div>'
         + '<div class="genesys__val mono">' + candidates.map(escapeHtml).join('<br>') + '</div>'
         + '</div>';
     }
     if (!rows) {
-      rows = '<div class="placeholder">No Genesys identifiers were captured for this attempt.</div>';
+      rows = '<div class="placeholder">No Genesys identifiers were captured for this attempt (no frames received).</div>';
     }
     return '<div class="eyebrow" style="margin-top:18px;margin-bottom:8px">Genesys attributes</div>'
       + '<div class="genesys">' + rows + '</div>';

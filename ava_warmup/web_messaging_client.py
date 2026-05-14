@@ -41,6 +41,10 @@ class WebMessagingClient:
         self.conversation_id: Optional[str] = None
         self.participant_id: Optional[str] = None
         self._conversation_id_candidates: list[str] = []
+        # Map of UUID-shaped value -> JSON path of first occurrence in any
+        # frame we received. Useful when Genesys never sends a frame containing
+        # the literal "conversationId" key but does include UUIDs elsewhere.
+        self._uuid_paths: dict[str, str] = {}
         self._debug_capture_frames = debug_capture_frames
         self._debug_capture_frame_limit = max(1, debug_capture_frame_limit)
         self._debug_frames: list[dict[str, Any]] = []
@@ -239,6 +243,20 @@ class WebMessagingClient:
                 if isinstance(body, str) and body:
                     return body
 
+    # Keys that, when seen anywhere in a server payload, identify the
+    # Genesys conversation (a.k.a. interactionId). The Web Messaging guest
+    # protocol uses several casings depending on the frame type.
+    _CONVERSATION_ID_KEYS = (
+        "conversationId",
+        "conversation_id",
+        "interactionId",
+        "interaction_id",
+    )
+    _PARTICIPANT_ID_KEYS = (
+        "participantId",
+        "participant_id",
+    )
+
     def _update_conversation_metadata(self, payload: object) -> None:
         if not isinstance(payload, dict):
             return
@@ -252,18 +270,36 @@ class WebMessagingClient:
                     return
                 setattr(self, attr_name, normalized)
 
-        def _walk(node: object, parent_key: Optional[str] = None) -> None:
+        all_paths: dict[str, str] = self._uuid_paths
+
+        def _record_uuid(path: str, value: object) -> None:
+            if not isinstance(value, str):
+                return
+            normalized = value.strip()
+            if not normalized or not self._is_likely_conversation_id(normalized):
+                return
+            # Record first-seen path per unique UUID so candidates show context.
+            if normalized not in all_paths:
+                all_paths[normalized] = path
+            self._add_conversation_id_candidate(normalized)
+
+        def _walk(node: object, parent_key: Optional[str] = None, path: str = "$") -> None:
             if isinstance(node, dict):
-                _set_if_missing("conversation_id", node.get("conversationId"))
-                _set_if_missing("conversation_id", node.get("conversation_id"))
-                _set_if_missing("participant_id", node.get("participantId"))
-                _set_if_missing("participant_id", node.get("participant_id"))
-                self._capture_conversation_id_candidate(node.get("conversationId"), is_explicit=True)
-                self._capture_conversation_id_candidate(node.get("conversation_id"), is_explicit=True)
+                for cid_key in self._CONVERSATION_ID_KEYS:
+                    if cid_key in node:
+                        _set_if_missing("conversation_id", node.get(cid_key))
+                        self._capture_conversation_id_candidate(
+                            node.get(cid_key), is_explicit=True
+                        )
+                for pid_key in self._PARTICIPANT_ID_KEYS:
+                    if pid_key in node:
+                        _set_if_missing("participant_id", node.get(pid_key))
                 conversation_obj = node.get("conversation")
                 if isinstance(conversation_obj, dict):
                     _set_if_missing("conversation_id", conversation_obj.get("id"))
-                    self._capture_conversation_id_candidate(conversation_obj.get("id"), is_explicit=True)
+                    self._capture_conversation_id_candidate(
+                        conversation_obj.get("id"), is_explicit=True
+                    )
                 participant_obj = node.get("participant")
                 if isinstance(participant_obj, dict):
                     _set_if_missing("participant_id", participant_obj.get("id"))
@@ -272,10 +308,16 @@ class WebMessagingClient:
                 if parent_key == "participant":
                     _set_if_missing("participant_id", node.get("id"))
                 for key, value in node.items():
-                    _walk(value, parent_key=key)
+                    child_path = f"{path}.{key}"
+                    if isinstance(value, str):
+                        _record_uuid(child_path, value)
+                    _walk(value, parent_key=key, path=child_path)
             elif isinstance(node, list):
-                for item in node:
-                    _walk(item, parent_key=parent_key)
+                for index, item in enumerate(node):
+                    child_path = f"{path}[{index}]"
+                    if isinstance(item, str):
+                        _record_uuid(child_path, item)
+                    _walk(item, parent_key=parent_key, path=child_path)
 
         _walk(payload)
         if self.conversation_id:
@@ -325,3 +367,15 @@ class WebMessagingClient:
 
     def get_conversation_id_candidates(self) -> list[str]:
         return list(self._conversation_id_candidates)
+
+    def get_uuid_paths(self) -> dict[str, str]:
+        """Return every UUID-shaped string we saw in any received frame.
+
+        Maps the UUID value to the JSON path of its first occurrence (e.g.
+        ``$.body.channel.from.id``). Useful when Genesys' Web Messaging guest
+        protocol does not include an explicit ``conversationId`` key in the
+        responses we receive — the user can inspect candidates to identify
+        the interaction.
+        """
+
+        return dict(self._uuid_paths)

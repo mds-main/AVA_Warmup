@@ -169,6 +169,10 @@ class AttemptResult(BaseModel):
     participant_id: Optional[str] = None
     session_token: Optional[str] = None
     conversation_id_candidates: list[str] = Field(default_factory=list)
+    # Every UUID-shaped value we observed across received frames, mapped to
+    # the JSON path of its first occurrence. Helps when Genesys does not
+    # send an explicit conversationId key for the guest protocol.
+    genesys_uuid_paths: dict[str, str] = Field(default_factory=dict)
 
 
 class PerformanceStageSummary(BaseModel):
