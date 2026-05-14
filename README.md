@@ -113,6 +113,7 @@ Supported schedule cadences:
 - `daily`: runs at the selected local time.
 - `weekly`: runs on the selected weekday and local time.
 - `monthly`: runs on the selected day of month and local time. Months with fewer days use the last valid day of that month.
+- Positive integer N (via `AVA_WARMUP_DEFAULT_CADENCE`): runs every N hours at the selected minute, anchored to the schedule's start date at `00:MM` local time.
 
 Schedules use an IANA timezone such as `UTC` or `America/New_York`. The start date defaults to the current local date when blank, and the end date is required. Schedule state is stored locally in `model_warmup_schedule.json` under the history directory.
 
@@ -163,8 +164,8 @@ Required only when the feature in the right column is used.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `AVA_WARMUP_DEFAULT_CADENCE` | `hourly` | `hourly`, `daily`, `weekly`, or `monthly`. |
-| `AVA_WARMUP_DEFAULT_MINUTE` | `0` | Minute (`0..59`) for `hourly`. |
+| `AVA_WARMUP_DEFAULT_CADENCE` | `hourly` | `hourly`, `daily`, `weekly`, `monthly`, or a positive integer N (run every N hours, e.g. `3` fires every 3 hours). |
+| `AVA_WARMUP_DEFAULT_MINUTE` | `0` | Minute (`0..59`) for `hourly` and numeric (every-N-hours) cadences. |
 | `AVA_WARMUP_DEFAULT_TIME_HHMM` | `02:00` | `HH:MM` local time for `daily`/`weekly`/`monthly`. |
 | `AVA_WARMUP_DEFAULT_WEEKDAY` | `0` | `0=Mon` .. `6=Sun` for `weekly`. |
 | `AVA_WARMUP_DEFAULT_DAY_OF_MONTH` | `1` | `1..31` for `monthly`. |

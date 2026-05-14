@@ -19,11 +19,36 @@ MODEL_WARMUP_DATE_RANGE_STATUS_COMPLETED = "completed"
 MODEL_WARMUP_DATE_RANGE_STATUS_CANCELED = "canceled"
 
 
+def cadence_interval_hours(cadence: str) -> Optional[int]:
+    """Return the hour interval for hourly or numeric ("every N hours") cadences.
+
+    Returns 1 for ``hourly``, ``N`` for a positive-integer string like ``"3"``,
+    and ``None`` for ``daily``/``weekly``/``monthly`` or any non-interval value.
+    """
+
+    normalized = str(cadence or "").strip().lower()
+    if normalized == "hourly":
+        return 1
+    try:
+        value = int(normalized)
+    except (TypeError, ValueError):
+        return None
+    if value < 1:
+        return None
+    return value
+
+
 def normalize_model_warmup_schedule_cadence(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized not in MODEL_WARMUP_SCHEDULE_CADENCES:
-        raise ValueError("AVA Spec Warm Up schedule cadence must be hourly, daily, weekly, or monthly.")
-    return normalized
+    if normalized in MODEL_WARMUP_SCHEDULE_CADENCES:
+        return normalized
+    interval = cadence_interval_hours(normalized)
+    if interval is not None:
+        return str(interval)
+    raise ValueError(
+        "AVA Spec Warm Up schedule cadence must be hourly, daily, weekly, monthly, "
+        "or a positive integer number of hours."
+    )
 
 
 def parse_schedule_hhmm(value: str) -> tuple[int, int]:
@@ -217,13 +242,24 @@ def compute_next_model_warmup_run_utc(
     if start_date is not None and local_now.date() < start_date:
         local_now = datetime.combine(start_date, time(0, 0), tzinfo=tzinfo) - timedelta(microseconds=1)
 
+    interval_hours = cadence_interval_hours(cadence)
+
     def _candidate_after(anchor: datetime) -> datetime:
-        if cadence == "hourly":
+        if interval_hours is not None:
             minute = normalize_schedule_minute(settings.get("minute", 0))
-            hourly_candidate = anchor.replace(minute=minute, second=0, microsecond=0)
-            if hourly_candidate <= anchor:
-                hourly_candidate += timedelta(hours=1)
-            return hourly_candidate
+            if interval_hours == 1:
+                hourly_candidate = anchor.replace(minute=minute, second=0, microsecond=0)
+                if hourly_candidate <= anchor:
+                    hourly_candidate += timedelta(hours=1)
+                return hourly_candidate
+            grid_date = start_date or anchor.date()
+            grid_anchor = datetime.combine(grid_date, time(0, minute), tzinfo=tzinfo)
+            if grid_anchor > anchor:
+                return grid_anchor
+            step_seconds = interval_hours * 3600
+            elapsed_seconds = (anchor - grid_anchor).total_seconds()
+            steps = int(elapsed_seconds // step_seconds) + 1
+            return grid_anchor + timedelta(hours=interval_hours * steps)
 
         hour, minute = parse_schedule_hhmm(str(settings.get("time_hhmm") or "02:00"))
         if cadence == "daily":
@@ -262,8 +298,8 @@ def compute_next_model_warmup_run_utc(
         return monthly_candidate
 
     def _advance_candidate(candidate: datetime) -> datetime:
-        if cadence == "hourly":
-            return candidate + timedelta(hours=1)
+        if interval_hours is not None:
+            return candidate + timedelta(hours=interval_hours)
         if cadence == "daily":
             return candidate + timedelta(days=1)
         if cadence == "weekly":
@@ -291,8 +327,12 @@ def compute_next_model_warmup_run_utc(
 def model_warmup_schedule_label(settings: dict[str, Any]) -> str:
     cadence = str(settings.get("cadence") or "").strip().lower()
     timezone_name = str(settings.get("timezone_name") or "UTC")
-    if cadence == "hourly":
-        return f"Hourly at minute {int(settings.get('minute', 0)):02d} ({timezone_name})"
+    interval_hours = cadence_interval_hours(cadence)
+    if interval_hours is not None:
+        minute = int(settings.get("minute", 0))
+        if interval_hours == 1:
+            return f"Hourly at minute {minute:02d} ({timezone_name})"
+        return f"Every {interval_hours} hours at minute {minute:02d} ({timezone_name})"
     if cadence == "daily":
         return f"Daily at {settings.get('time_hhmm', '02:00')} ({timezone_name})"
     if cadence == "weekly":

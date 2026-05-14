@@ -51,6 +51,7 @@ from .runner import (
 from .scheduler import (
     ModelWarmupScheduleStore,
     ModelWarmupScheduler,
+    cadence_interval_hours,
     compute_next_model_warmup_run_utc,
     model_warmup_schedule_label,
     normalize_model_warmup_schedule_cadence,
@@ -933,7 +934,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
         except ValueError as exc:
             errors.append(str(exc))
 
-        if cadence == "hourly":
+        if cadence_interval_hours(cadence) is not None:
             try:
                 schedule["minute"] = normalize_schedule_minute(
                     _field(
@@ -1217,7 +1218,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
                 "end_date": end_date,
                 "run_request": _model_warmup_request_to_dict(run_request),
             }
-            if cadence == "hourly":
+            if cadence_interval_hours(cadence) is not None:
                 schedule_payload["minute"] = normalize_schedule_minute(
                     current_config.default_minute
                 )
