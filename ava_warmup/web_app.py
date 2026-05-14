@@ -67,6 +67,8 @@ from .suites import (
     DEFAULT_WARMUP_SUITE,
     DEFAULT_WARMUP_SUITE_ID,
     WarmupSuiteSpec,
+    apply_first_message_override,
+    default_warmup_suite,
     load_available_suites,
     resolve_suite,
     suite_from_request_payload,
@@ -151,14 +153,33 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
     def _suite_project_root() -> Path:
         return Path(app.config.get("warmup_suites_project_root") or project_root)
 
+    def _resolve_suite_with_config(
+        suite_id: str | None,
+        *,
+        first_message_override: str | None = None,
+    ) -> WarmupSuiteSpec:
+        """Resolve a suite by id and apply env + UI first-message overrides."""
+
+        current_config: AppConfig = app.config["app_config"]
+        normalized_id = str(suite_id or "").strip() or DEFAULT_WARMUP_SUITE_ID
+        if normalized_id == DEFAULT_WARMUP_SUITE_ID:
+            suite = default_warmup_suite(current_config.default_message)
+        else:
+            suite = resolve_suite(_suite_project_root(), normalized_id)
+        return apply_first_message_override(suite, first_message_override)
+
     def _available_suite_context(selected_suite_id: str | None = None) -> dict[str, Any]:
+        current_config: AppConfig = app.config["app_config"]
         suites, suite_errors = load_available_suites(_suite_project_root())
+        # Override the default suite's first message with the env-driven value.
+        env_default_suite = default_warmup_suite(current_config.default_message)
+        suites = [env_default_suite if s.suite_id == DEFAULT_WARMUP_SUITE_ID else s for s in suites]
         selected = selected_suite_id or DEFAULT_WARMUP_SUITE_ID
         if not any(suite.suite_id == selected for suite in suites):
             selected = DEFAULT_WARMUP_SUITE_ID
         selected_suite_spec = next(
             (s for s in suites if s.suite_id == selected),
-            DEFAULT_WARMUP_SUITE,
+            env_default_suite,
         )
         return {
             "warmup_suites": suites,
@@ -223,6 +244,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
                 "response_timeout": config.response_timeout,
                 "success_threshold": config.success_threshold,
                 "default_attempt_count": getattr(config, "default_attempt_count", MODEL_WARMUP_DEFAULT_ATTEMPTS),
+                "default_message": getattr(config, "default_message", "no help needed"),
                 "default_execution_mode": getattr(config, "default_execution_mode", "serial"),
                 "default_worker_count": getattr(config, "default_worker_count", 1),
                 "default_pacing_seconds": float(getattr(config, "default_pacing_seconds", 1.0)),
@@ -774,12 +796,24 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             default=DEFAULT_WARMUP_SUITE_ID,
         )
 
+        first_message_override = _field(
+            data,
+            "model_warmup_first_message",
+            "first_message",
+            default="",
+        )
         errors: list[str] = []
         try:
-            suite_spec = resolve_suite(_suite_project_root(), str(suite_id_raw or DEFAULT_WARMUP_SUITE_ID))
+            suite_spec = _resolve_suite_with_config(
+                str(suite_id_raw or DEFAULT_WARMUP_SUITE_ID),
+                first_message_override=str(first_message_override or ""),
+            )
         except ValueError as exc:
             errors.append(str(exc))
-            suite_spec = DEFAULT_WARMUP_SUITE
+            suite_spec = _resolve_suite_with_config(
+                DEFAULT_WARMUP_SUITE_ID,
+                first_message_override=str(first_message_override or ""),
+            )
         if not deployment_id:
             errors.append("Deployment ID is required for AVA Spec Warm Up.")
         if not region:
@@ -854,7 +888,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             suite_spec = suite_from_request_payload(suite_payload)
         else:
             suite_id = str(payload.get("suite_id") or DEFAULT_WARMUP_SUITE_ID).strip()
-            suite_spec = resolve_suite(_suite_project_root(), suite_id)
+            suite_spec = _resolve_suite_with_config(suite_id)
         return ModelWarmUpRunRequest(
             deployment_id=str(payload.get("deployment_id") or "").strip(),
             region=str(payload.get("region") or "").strip(),
@@ -1182,7 +1216,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
         if not current_config.default_schedule_end_date:
             return
         try:
-            suite_spec = resolve_suite(_suite_project_root(), DEFAULT_WARMUP_SUITE_ID)
+            suite_spec = _resolve_suite_with_config(DEFAULT_WARMUP_SUITE_ID)
             run_request = ModelWarmUpRunRequest(
                 deployment_id=deployment_id,
                 region=region,

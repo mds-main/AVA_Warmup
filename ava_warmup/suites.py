@@ -46,6 +46,39 @@ class WarmupSuiteSpec:
 DEFAULT_WARMUP_SUITE = WarmupSuiteSpec()
 
 
+def default_warmup_suite(default_message: str | None = None) -> WarmupSuiteSpec:
+    """Build the default suite with an optional first-message override.
+
+    Used to apply ``AVA_WARMUP_DEFAULT_MESSAGE`` (env-driven) without mutating
+    the module-level ``DEFAULT_WARMUP_SUITE`` constant.
+    """
+
+    message = str(default_message or "").strip() or DEFAULT_WARMUP_MESSAGE
+    if message == DEFAULT_WARMUP_MESSAGE:
+        return DEFAULT_WARMUP_SUITE
+    return WarmupSuiteSpec(messages=(message,))
+
+
+def apply_first_message_override(suite: WarmupSuiteSpec, override: str | None) -> WarmupSuiteSpec:
+    """Return a copy of ``suite`` with ``messages[0]`` replaced by ``override``.
+
+    Whitespace-only or empty overrides leave the suite unchanged. Trailing
+    messages (multi-step suites) are preserved.
+    """
+
+    normalized = str(override or "").strip()
+    if not normalized:
+        return suite
+    remaining = suite.messages[1:] if len(suite.messages) > 1 else ()
+    return WarmupSuiteSpec(
+        suite_id=suite.suite_id,
+        suite_name=suite.suite_name,
+        scenario_name=suite.scenario_name,
+        messages=(normalized,) + remaining,
+        source_path=suite.source_path,
+    )
+
+
 def normalize_suite_id(value: str) -> str:
     normalized = str(value or "").strip()
     if not normalized:

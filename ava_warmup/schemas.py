@@ -24,6 +24,7 @@ class AppConfig(BaseModel):
     history_full_json_runs: int = 20
     history_gzip_runs: int = 20
     default_attempt_count: int = 228
+    default_message: str = "no help needed"
     default_execution_mode: str = "serial"
     default_worker_count: int = 1
     default_pacing_seconds: float = 1.0

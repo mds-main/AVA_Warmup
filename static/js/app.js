@@ -97,6 +97,11 @@
     pacing_seconds: Number(state.config.default_pacing_seconds) || 1.0,
     performance_profile: state.config.default_performance_profile || 'safe_adaptive',
     suite_id: state.selectedSuiteId,
+    first_message: (function () {
+      var s = (bootstrap.suites || []).find(function (x) { return x.suite_id === state.selectedSuiteId; });
+      if (s && s.messages && s.messages.length) return String(s.messages[0]);
+      return state.config.default_message || 'no help needed';
+    })(),
     cadence: normalizeCadenceFromConfig(state.config.default_cadence),
     cadence_hours: parseCadenceHours(state.config.default_cadence) || 3,
     timezone_name: state.config.default_timezone || 'UTC',
@@ -1169,19 +1174,25 @@
   function renderSuiteTab() {
     var cfg = state.cfg;
     var suite = state.suites.find(function (s) { return s.suite_id === cfg.suite_id; }) || state.suites[0] || { suite_name: '—', scenario_name: '—', messages: [] };
+    var envDefault = state.config.default_message || 'no help needed';
+    var remaining = (suite.messages || []).slice(1);
     return ''
       + '<div class="field"><label class="field__lbl">Warm-up suite</label>'
       + '<select class="select" data-cfg="suite_id">'
       + state.suites.map(function (s) { return '<option value="' + escapeHtml(s.suite_id) + '"' + (s.suite_id === cfg.suite_id ? ' selected' : '') + '>' + escapeHtml(s.suite_name) + '</option>'; }).join('')
       + '</select>'
       + '<span class="field__hint">Default suite is built in. Custom JSON suites live under warmup_suites/.</span></div>'
+      + '<div class="field"><label class="field__lbl">First message</label>'
+      + '<input class="input" type="text" data-cfg="first_message" value="' + escapeHtml(cfg.first_message) + '" placeholder="' + escapeHtml(envDefault) + '">'
+      + '<span class="field__hint">Overrides the first user message for this run. Env default: <code class="mono">' + escapeHtml(envDefault) + '</code></span></div>'
       + '<div style="border:1px solid var(--line);border-radius:10px;background:var(--bg-1);padding:12px;margin-top:4px">'
       + '<div style="display:flex;gap:16px;margin-bottom:8px">'
       + '<div><div class="eyebrow">Scenario</div><div style="font-weight:600">' + escapeHtml(suite.scenario_name) + '</div></div>'
-      + '<div><div class="eyebrow">Messages</div><div style="font-weight:600">' + (suite.messages || []).length + '</div></div>'
+      + '<div><div class="eyebrow">Messages</div><div style="font-weight:600">' + (1 + remaining.length) + '</div></div>'
       + '</div>'
       + '<ol style="margin:0;padding-left:18px;color:var(--fg-2);font-size:12.5px;line-height:1.6">'
-      + (suite.messages || []).map(function (m) { return '<li><span class="mono" style="color:var(--fg-3)">"</span>' + escapeHtml(m) + '<span class="mono" style="color:var(--fg-3)">"</span></li>'; }).join('')
+      + '<li><span class="mono" style="color:var(--fg-3)">"</span>' + escapeHtml(cfg.first_message || envDefault) + '<span class="mono" style="color:var(--fg-3)">"</span></li>'
+      + remaining.map(function (m) { return '<li><span class="mono" style="color:var(--fg-3)">"</span>' + escapeHtml(m) + '<span class="mono" style="color:var(--fg-3)">"</span></li>'; }).join('')
       + '</ol></div>';
   }
 
@@ -1489,6 +1500,7 @@
       pacing_seconds: cfg.pacing_seconds,
       performance_profile: cfg.performance_profile,
       suite_id: cfg.suite_id,
+      first_message: cfg.first_message,
     };
     fetch('/run/model_warm_up', {
       method: 'POST',
@@ -1770,6 +1782,14 @@
       // Sync paired inputs (range + number for attempts)
       if (key === 'attempt_count') {
         $$('[data-cfg="attempt_count"]').forEach(function (n) { if (n !== el) n.value = state.cfg.attempt_count; });
+      }
+      // Switching suites resets first_message to the new suite's first message,
+      // so the visible value reflects what will actually be sent.
+      if (key === 'suite_id') {
+        var nextSuite = state.suites.find(function (s) { return s.suite_id === v; });
+        if (nextSuite && nextSuite.messages && nextSuite.messages.length) {
+          state.cfg.first_message = String(nextSuite.messages[0]);
+        }
       }
       updateEffectiveRate();
       // Re-render dependent tabs immediately

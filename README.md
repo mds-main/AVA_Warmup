@@ -155,6 +155,7 @@ Required only when the feature in the right column is used.
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `AVA_WARMUP_DEFAULT_ATTEMPT_COUNT` | `228` | Attempts per run. Must be ≥ 1. |
+| `AVA_WARMUP_DEFAULT_MESSAGE` | `no help needed` | First user message sent to the bot for the built-in default suite, and the placeholder/default of the **First message** field in the Configure → Suite drawer. UI override (per-run or per-schedule) wins over this. Custom JSON suites under `warmup_suites/` keep their own `messages`. |
 | `AVA_WARMUP_DEFAULT_EXECUTION_MODE` | `serial` | `serial` or `parallel`. |
 | `AVA_WARMUP_DEFAULT_WORKER_COUNT` | `1` | Parallel workers, clamped `1..10`. |
 | `AVA_WARMUP_DEFAULT_PACING_SECONDS` | `1.0` | Must be one of `0.5`, `1.0`, `2.5`, `5.0`, `7.5`. |

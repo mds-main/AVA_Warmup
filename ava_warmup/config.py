@@ -84,6 +84,7 @@ def load_app_config() -> AppConfig:
         history_full_json_runs=_env_int("AVA_WARMUP_HISTORY_FULL_JSON_RUNS", 20),
         history_gzip_runs=_env_int("AVA_WARMUP_HISTORY_GZIP_RUNS", 20),
         default_attempt_count=_env_int("AVA_WARMUP_DEFAULT_ATTEMPT_COUNT", 228),
+        default_message=_env_str("AVA_WARMUP_DEFAULT_MESSAGE", "no help needed"),
         default_execution_mode=_env_str("AVA_WARMUP_DEFAULT_EXECUTION_MODE", "serial"),
         default_worker_count=_env_int("AVA_WARMUP_DEFAULT_WORKER_COUNT", 1),
         default_pacing_seconds=_env_float("AVA_WARMUP_DEFAULT_PACING_SECONDS", 1.0),
