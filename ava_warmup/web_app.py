@@ -869,8 +869,8 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             errors.append("AVA Spec Warm Up parallel workers must be a number.")
             worker_count = current_config.default_worker_count
         else:
-            if worker_count_unclamped < 1 or worker_count_unclamped > 5:
-                errors.append("AVA Spec Warm Up parallel workers must be between 1 and 5.")
+            if worker_count_unclamped < 1 or worker_count_unclamped > 10:
+                errors.append("AVA Spec Warm Up parallel workers must be between 1 and 10.")
             worker_count = normalize_model_warmup_workers(worker_count_unclamped)
         try:
             pacing_seconds = normalize_model_warmup_pacing(pacing_raw)
