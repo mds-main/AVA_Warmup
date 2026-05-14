@@ -344,7 +344,12 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             default_attempts=current_config.default_attempt_count,
             pacing_choices=sorted(MODEL_WARMUP_PACING_CHOICES),
             fixed_message=MODEL_WARMUP_FIXED_MESSAGE,
-            bootstrap_json=json.dumps(bootstrap, default=str),
+            bootstrap_json=(
+                json.dumps(bootstrap, default=str)
+                .replace("<", "\\u003c")
+                .replace(">", "\\u003e")
+                .replace("&", "\\u0026")
+            ),
         ), status_code
 
     def _render_home(status_code: int = 200, *, errors: list[str] | None = None, selected_suite_id: str | None = None):
@@ -488,6 +493,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             app.config["active_trigger_source"] = None
             app.config["stop_event"] = threading.Event()
             app.config["active_model_warmup_metadata"] = None
+            app.config["scheduled_run_started_at_utc"] = None
         if report_to_store is not None:
             entry = _save_report_history(report_to_store)
             _record_model_warmup_schedule_completion(report_to_store, entry)
@@ -720,6 +726,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
                 app.config["active_trigger_source"] = None
                 app.config["stop_event"] = threading.Event()
             app.config["active_model_warmup_metadata"] = None
+            app.config["scheduled_run_started_at_utc"] = None
         entry = _save_report_history(finalized_report)
         _record_model_warmup_schedule_completion(finalized_report, entry)
         return finalized_report
@@ -1059,6 +1066,7 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
                         app.config["stop_event"] = threading.Event()
                     if not app.config.get("run_active", False):
                         app.config["active_model_warmup_metadata"] = None
+                        app.config["scheduled_run_started_at_utc"] = None
                 loop.close()
 
         thread = threading.Thread(target=run_tests, daemon=True)
@@ -1491,7 +1499,13 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
                 "suite_name": entry.get("suite_name"),
                 "timestamp": entry.get("timestamp"),
                 "overall_attempts": entry.get("overall_attempts"),
+                "overall_successes": entry.get("overall_successes"),
+                "overall_failures": entry.get("overall_failures"),
+                "overall_timeouts": entry.get("overall_timeouts"),
+                "overall_skipped": entry.get("overall_skipped"),
                 "overall_success_rate": entry.get("overall_success_rate"),
+                "duration_seconds": entry.get("duration_seconds"),
+                "has_regressions": entry.get("has_regressions"),
                 "storage_type": entry.get("storage_type", "full_json"),
                 "run_type": entry.get("run_type", "model_warm_up"),
                 "model_warmup_run": entry.get("model_warmup_run"),

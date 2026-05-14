@@ -315,7 +315,8 @@
   }
 
   function pickSuite() {
-    return (state.suites || []).find(function (s) { return s.suite_id === state.selectedSuiteId; }) || (state.suites && state.suites[0]) || { suite_name: 'AVA Spec Warm Up Suite', scenario_name: 'No Help Needed Warm Up', messages: ['no help needed'] };
+    var preferred = (state.cfg && state.cfg.suite_id) || state.selectedSuiteId;
+    return (state.suites || []).find(function (s) { return s.suite_id === preferred; }) || (state.suites && state.suites[0]) || { suite_name: 'AVA Spec Warm Up Suite', scenario_name: 'No Help Needed Warm Up', messages: ['no help needed'] };
   }
 
   // ----------------------------------------------------------------
@@ -469,6 +470,8 @@
     while (state.attempts.length <= idx) {
       state.attempts.push({ n: state.attempts.length + 1, status: 'pending', durationS: null });
     }
+    var prev = state.attempts[idx];
+    var wasTerminal = prev && (prev.status === 'ok' || prev.status === 'warn' || prev.status === 'err' || prev.status === 'skipped');
     var status = attemptStatusFromResult(res);
     state.attempts[idx] = {
       n: res.attempt_number,
@@ -481,8 +484,9 @@
       stages: res.warmup_stage_durations_ms || {},
       raw: res,
     };
-    // Stage samples
-    if (res.warmup_stage_durations_ms) {
+    // Stage samples — only push once per attempt to avoid skewing percentiles when
+    // the same attempt re-arrives via the /run/status progress window.
+    if (!wasTerminal && res.warmup_stage_durations_ms) {
       Object.keys(res.warmup_stage_durations_ms).forEach(function (k) {
         if (!state.stageSamples[k]) state.stageSamples[k] = [];
         state.stageSamples[k].push(+res.warmup_stage_durations_ms[k] || 0);
@@ -896,12 +900,22 @@
 
   function applyStatus(status) {
     if (!status) return;
+    var wasActive = state.runActive;
     state.runActive = !!status.run_active;
     state.stopRequested = !!status.stop_requested;
-    state.activeRunId = status.active_run_id || state.activeRunId;
-    state.triggerSource = status.trigger_source || state.triggerSource;
-    state.warmup = status.model_warmup_run || state.warmup;
-    state.liveProgress = status.live_progress || state.liveProgress;
+    // Trust the server: when no run is active, clear the active id so subsequent polls
+    // don't keep reporting a stale token.
+    state.activeRunId = status.active_run_id || (state.runActive ? state.activeRunId : null);
+    state.triggerSource = status.trigger_source || (state.runActive ? state.triggerSource : 'manual');
+    // While a run is active the server's live snapshot is authoritative; once it ends
+    // we keep the last known snapshot only if it matches the completed run.
+    if (state.runActive) {
+      state.warmup = status.model_warmup_run || state.warmup;
+      state.liveProgress = status.live_progress || state.liveProgress;
+    } else {
+      if (status.model_warmup_run) state.warmup = status.model_warmup_run;
+      if (status.live_progress) state.liveProgress = status.live_progress;
+    }
     // Latest progress events: replace
     if (Array.isArray(status.progress)) {
       state.progressEvents = status.progress;
@@ -916,6 +930,11 @@
       });
       // Update latency series from completed attempts
       rebuildSeriesFromAttempts();
+    }
+    // When a run just finished, clear the viewing-history pin so the latest run's
+    // report becomes the focus instead of an old historical view.
+    if (wasActive && !state.runActive) {
+      state.viewingHistoryRunId = null;
     }
   }
 
@@ -1026,11 +1045,18 @@
         if (res.status === 202 && res.body.ok) {
           flash('Warm-up started.', 'ok');
           state.runActive = true;
+          state.stopRequested = false;
+          state.activeRunId = res.body.run_id || null;
+          state.viewingHistoryRunId = null;
+          state.selectedSuiteId = cfg.suite_id;
           state.attempts = [];
           state.stageSamples = {};
           state.latencySeries = [];
           state.throughputSeries = [];
           state.report = null;
+          state.warmup = null;
+          state.liveProgress = null;
+          state.progressEvents = [];
           renderAll();
           startPolling();
         } else {

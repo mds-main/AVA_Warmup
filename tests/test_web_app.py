@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 import time
 
 import pytest
@@ -196,6 +197,10 @@ def test_run_model_warm_up_json_completes_and_persists_history(client):
     assert len(history) == 1
     assert history[0]["run_type"] == "model_warm_up"
     assert history[0]["model_warmup_run"]["completed_attempts"] == 2
+    # /results/history must surface duration_seconds so the SPA history table
+    # can render the Duration column for past runs.
+    assert "duration_seconds" in history[0]
+    assert history[0]["duration_seconds"] is not None
 
     results = client.get("/results")
     assert results.status_code == 200
@@ -444,6 +449,59 @@ def test_run_status_derives_live_progress_snapshot(app, client):
     assert payload["live_progress"]["estimated_remaining_seconds"] is not None
     assert "Diagnostics Live View" in results_body
     assert "Starting suite" in results_body
+
+
+def test_bootstrap_json_escapes_script_breakout(app, client):
+    """Bootstrap JSON must escape <, >, and & so values cannot terminate
+    the surrounding <script type="application/json"> block. Inject a value
+    containing </script> via a custom suite to prove the escape works on
+    user-controlled content too."""
+
+    body = client.get("/").get_data(as_text=True)
+    # Pull out the <script id="ava-bootstrap"> payload.
+    start_marker = '<script id="ava-bootstrap" type="application/json">'
+    end_marker = "</script>"
+    start = body.index(start_marker) + len(start_marker)
+    end = body.index(end_marker, start)
+    payload = body[start:end]
+    # The escape replaces all `<`, `>`, `&` with their unicode-escape form, so
+    # the literal characters never appear inside the JSON payload.
+    assert "<" not in payload
+    assert ">" not in payload
+    assert "&" not in payload
+    # Sanity check: the payload is still valid JSON after the substitutions and
+    # the escaped sequences round-trip back to the original characters.
+    parsed = json.loads(payload)
+    assert isinstance(parsed, dict)
+
+    # Inject a value that *would* break out if the escape ever regressed: place a
+    # </script> in a custom warm-up suite file. Render the page again and confirm
+    # the script tag survives intact.
+    suite_path = (
+        Path(app.config["warmup_suites_project_root"])
+        / "warmup_suites"
+        / "xss_probe.json"
+    )
+    suite_path.write_text(
+        json.dumps(
+            {
+                "suite_name": "XSS </script><img src=x onerror=alert(1)>",
+                "scenario_name": "probe",
+                "messages": ["hello"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    body2 = client.get("/").get_data(as_text=True)
+    start2 = body2.index(start_marker) + len(start_marker)
+    end2 = body2.index(end_marker, start2)
+    probed = body2[start2:end2]
+    assert "</script>" not in probed
+    assert "<" not in probed and ">" not in probed
+    # And the suite name still round-trips through JSON parsing.
+    parsed2 = json.loads(probed)
+    suite_names = {s["suite_name"] for s in parsed2.get("suites", [])}
+    assert "XSS </script><img src=x onerror=alert(1)>" in suite_names
 
 
 def test_env_driven_defaults_flow_into_home_bootstrap(tmp_path, monkeypatch):
