@@ -182,17 +182,10 @@
                 <div class="cockpit__metric"><div class="l">Workers</div><div class="v" id="m-workers">{% if warmup %}{{ warmup.effective_worker_count }} {{ warmup.execution_mode }}{% else %}1 serial{% endif %}</div></div>
               </div>
 
-              <svg id="throughput-spark" class="spark" viewBox="0 0 600 36" preserveAspectRatio="none">
-                <defs>
-                  <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0" stop-color="oklch(78% 0.16 65 / 0.45)"/>
-                    <stop offset="1" stop-color="oklch(78% 0.16 65 / 0)"/>
-                  </linearGradient>
-                </defs>
-                <line class="baseline" x1="0" x2="600" y1="34" y2="34"/>
-                <path class="area" d=""/>
-                <path class="line" d=""/>
-              </svg>
+              <div id="throughput-spark" class="spark" title="recent attempts/sec — hover for value">
+                <svg class="spark__svg" preserveAspectRatio="none"></svg>
+                <div class="spark__empty">throughput appears once attempts complete</div>
+              </div>
             </div>
 
             <div class="cockpit__actions" id="cockpit-actions">
@@ -224,16 +217,17 @@
               </div>
             </div>
             <div class="card__bd" style="padding:0">
-              <div class="lat-chart">
-                <svg id="lat-chart-svg" viewBox="0 0 600 160" preserveAspectRatio="none"></svg>
-                <div class="lat-chart__empty" id="lat-chart-empty">no samples yet</div>
+              <div class="lat-chart" id="lat-chart">
+                <svg id="lat-chart-svg" preserveAspectRatio="none"></svg>
+                <div class="lat-chart__current" id="lat-chart-current" aria-hidden="true"></div>
+                <div class="lat-chart__empty" id="lat-chart-empty">no samples yet — start a run to populate</div>
               </div>
               <div class="lat-legend">
                 <span class="lat-legend__i"><span class="lat-legend__sw" style="background:var(--ok)"></span> p50</span>
                 <span class="lat-legend__i"><span class="lat-legend__sw" style="background:var(--warn)"></span> p95</span>
                 <span class="lat-legend__i"><span class="lat-legend__sw" style="background:var(--err)"></span> p99</span>
                 <span style="flex:1"></span>
-                <span class="lat-legend__i muted">live attempt latency</span>
+                <span class="lat-legend__i muted">hover the chart for exact numbers</span>
               </div>
             </div>
           </div>

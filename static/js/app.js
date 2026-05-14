@@ -140,6 +140,96 @@
     return sortedAsc[lo] + (sortedAsc[hi] - sortedAsc[lo]) * w;
   }
 
+  // ----------------------------------------------------------------
+  // Number/axis helpers
+  // ----------------------------------------------------------------
+  // "Nice number" algorithm (Heckbert, Graphics Gems) — picks tick spacings
+  // that read as clean human numbers (1, 2, 5, 10 × 10^n), so the y-axis
+  // labels are always round values like 0/500/1000/1500ms instead of
+  // arbitrary fractions of the data max.
+  function niceNum(range, round) {
+    if (range <= 0) return 1;
+    var exp = Math.floor(Math.log10(range));
+    var frac = range / Math.pow(10, exp);
+    var niceFrac;
+    if (round) {
+      if (frac < 1.5) niceFrac = 1;
+      else if (frac < 3) niceFrac = 2;
+      else if (frac < 7) niceFrac = 5;
+      else niceFrac = 10;
+    } else {
+      if (frac <= 1) niceFrac = 1;
+      else if (frac <= 2) niceFrac = 2;
+      else if (frac <= 5) niceFrac = 5;
+      else niceFrac = 10;
+    }
+    return niceFrac * Math.pow(10, exp);
+  }
+
+  function niceScale(min, max, targetTicks) {
+    targetTicks = targetTicks || 5;
+    if (!isFinite(min)) min = 0;
+    if (!isFinite(max) || max <= min) max = min + 1;
+    var range = niceNum(max - min, false);
+    var step = niceNum(range / Math.max(1, targetTicks - 1), true);
+    var niceMin = Math.floor(min / step) * step;
+    var niceMax = Math.ceil(max / step) * step;
+    var ticks = [];
+    var epsilon = step * 1e-9;
+    for (var v = niceMin; v <= niceMax + epsilon; v += step) {
+      // Round to avoid floating-point cruft like 0.30000000000000004.
+      ticks.push(Math.round(v / step) * step);
+    }
+    return { min: niceMin, max: niceMax, step: step, ticks: ticks };
+  }
+
+  function formatMs(ms) {
+    if (!isFinite(ms) || ms < 0) return '—';
+    if (ms < 1) return ms.toFixed(2) + ' ms';
+    if (ms < 10) return ms.toFixed(1) + ' ms';
+    if (ms < 10000) return Math.round(ms) + ' ms';
+    return (ms / 1000).toFixed(2) + ' s';
+  }
+
+  function formatAxisMs(ms) {
+    if (!isFinite(ms)) return '';
+    if (ms === 0) return '0';
+    if (Math.abs(ms) < 1000) return Math.round(ms) + ' ms';
+    var seconds = ms / 1000;
+    if (Math.abs(seconds) < 10) return seconds.toFixed(1) + ' s';
+    return Math.round(seconds) + ' s';
+  }
+
+  function formatAttemptsPerSec(v) {
+    if (!isFinite(v) || v < 0) return '—';
+    if (v >= 100) return v.toFixed(0) + '/s';
+    if (v >= 10) return v.toFixed(1) + '/s';
+    if (v >= 1) return v.toFixed(2) + '/s';
+    return v.toFixed(3) + '/s';
+  }
+
+  function formatAxisRate(v) {
+    if (!isFinite(v)) return '';
+    if (v === 0) return '0';
+    if (v >= 10) return v.toFixed(0) + '/s';
+    if (v >= 1) return v.toFixed(1) + '/s';
+    return v.toFixed(2) + '/s';
+  }
+
+  // Track per-chart layout so resize observers can re-render with new pixel
+  // dimensions. preserveAspectRatio="none" used to stretch SVG text and
+  // strokes; we now size each chart's viewBox to its actual rendered pixel
+  // box and re-render whenever the container size changes.
+  var chartObservers = {};
+  function observeChartResize(containerId, redraw) {
+    if (chartObservers[containerId]) return;
+    var container = document.getElementById(containerId);
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    var observer = new ResizeObserver(function () { redraw(); });
+    observer.observe(container);
+    chartObservers[containerId] = observer;
+  }
+
   function deploymentLabel(id) {
     if (!id) return 'unconfigured';
     if (id.length <= 14) return id;
@@ -320,88 +410,335 @@
   }
 
   // ----------------------------------------------------------------
-  // Throughput sparkline (derived from real progress)
+  // Throughput sparkline
+  //   Small in-cockpit chart showing recent attempts/sec trend. The viewBox
+  //   is sized to actual rendered pixels each draw so the area gradient and
+  //   line strokes stay 1:1 and the hover tooltip can map mouse->index
+  //   without distortion.
   // ----------------------------------------------------------------
   function renderThroughputSpark() {
-    var svg = $('throughput-spark');
-    if (!svg) return;
-    var data = state.throughputSeries;
-    var w = 600, h = 36;
-    var line = svg.querySelector('.line');
-    var area = svg.querySelector('.area');
-    if (!data.length) {
-      if (line) line.setAttribute('d', '');
-      if (area) area.setAttribute('d', '');
+    var container = $('throughput-spark');
+    if (!container) return;
+    var svg = container.querySelector('svg');
+    var emptyEl = container.querySelector('.spark__empty');
+    var data = state.throughputSeries.slice();
+    if (!data.length || !svg) {
+      if (svg) svg.innerHTML = '';
+      if (emptyEl) emptyEl.style.display = '';
       return;
     }
-    var min = Math.min.apply(null, data);
-    var max = Math.max.apply(null, data);
-    var range = (max - min) || 1;
-    var pts = data.map(function (v, i) {
-      var x = (i / (data.length - 1 || 1)) * w;
-      var y = h - ((v - min) / range) * (h - 4) - 2;
-      return [x, y];
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    var rect = container.getBoundingClientRect();
+    var w = Math.max(120, Math.round(rect.width));
+    var h = Math.max(36, Math.round(rect.height));
+    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+
+    var maxV = Math.max.apply(null, data);
+    var minV = 0;
+    if (!isFinite(maxV) || maxV <= 0) maxV = 1;
+    var pad = { l: 0, r: 0, t: 4, b: 4 };
+    function ys(v) {
+      return h - pad.b - ((v - minV) / (maxV - minV || 1)) * (h - pad.t - pad.b);
+    }
+    function xs(i) {
+      if (data.length < 2) return w / 2;
+      return pad.l + (i / (data.length - 1)) * (w - pad.l - pad.r);
+    }
+
+    var pts = data.map(function (v, i) { return [xs(i), ys(v)]; });
+    var lineD = pts.map(function (p, i) {
+      return (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1);
+    }).join(' ');
+    var areaD = lineD
+      + ' L ' + xs(data.length - 1).toFixed(1) + ',' + (h - pad.b).toFixed(1)
+      + ' L ' + xs(0).toFixed(1) + ',' + (h - pad.b).toFixed(1)
+      + ' Z';
+
+    var latest = data[data.length - 1];
+
+    svg.innerHTML =
+      '<defs>'
+      + '<linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">'
+      + '<stop offset="0" stop-color="oklch(78% 0.16 65 / 0.45)"/>'
+      + '<stop offset="1" stop-color="oklch(78% 0.16 65 / 0)"/>'
+      + '</linearGradient>'
+      + '</defs>'
+      + '<line class="baseline" x1="0" x2="' + w + '" y1="' + (h - pad.b) + '" y2="' + (h - pad.b) + '"/>'
+      + '<path class="area" d="' + areaD + '"/>'
+      + '<path class="line" d="' + lineD + '"/>'
+      + '<circle class="spark__current" cx="' + xs(data.length - 1).toFixed(1) + '" cy="' + ys(latest).toFixed(1) + '" r="2.5"/>';
+
+    // Cache geometry for hover lookups.
+    container._spark = { data: data, xs: xs, ys: ys, pad: pad, w: w, h: h };
+
+    observeChartResize('throughput-spark', renderThroughputSpark);
+  }
+
+  function attachSparkHover() {
+    var container = $('throughput-spark');
+    if (!container || container._hoverAttached) return;
+    container._hoverAttached = true;
+    var tooltip = ensureChartTooltip();
+    container.addEventListener('mousemove', function (e) {
+      var geom = container._spark;
+      if (!geom || !geom.data.length) { hideChartTooltip(); return; }
+      var rect = container.getBoundingClientRect();
+      var x = e.clientX - rect.left;
+      // Map pixel x → index within data.
+      var idx = Math.round((x / Math.max(1, rect.width)) * (geom.data.length - 1));
+      idx = Math.max(0, Math.min(geom.data.length - 1, idx));
+      var value = geom.data[idx];
+      showChartTooltip(tooltip, e.clientX, e.clientY, [
+        { label: 'attempts/sec', value: formatAttemptsPerSec(value), color: 'var(--amber)' },
+        { label: 'sample', value: '#' + (idx + 1) + ' of ' + geom.data.length, muted: true },
+      ]);
     });
-    var lineD = pts.map(function (p, i) { return (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ');
-    var areaD = lineD + ' L ' + w + ',' + h + ' L 0,' + h + ' Z';
-    if (line) line.setAttribute('d', lineD);
-    if (area) area.setAttribute('d', areaD);
+    container.addEventListener('mouseleave', hideChartTooltip);
   }
 
   // ----------------------------------------------------------------
   // Latency chart
+  //   Live rolling p50/p95/p99 attempt latency. The chart sizes its viewBox
+  //   to actual rendered pixels (via ResizeObserver) so axis text and stroke
+  //   widths render at 1:1 instead of stretching. Y-ticks come from a
+  //   nice-number algorithm so labels are always clean (0/500/1000/1500ms
+  //   etc) rather than arbitrary fractions of the data max.
   // ----------------------------------------------------------------
   function renderLatencyChart() {
+    var container = $('lat-chart');
     var svg = $('lat-chart-svg');
     var empty = $('lat-chart-empty');
-    if (!svg) return;
-    var data = state.latencySeries;
+    var rightLabels = $('lat-chart-current');
+    if (!container || !svg) return;
+    var data = state.latencySeries.slice();
     if (!data.length) {
       svg.innerHTML = '';
       if (empty) empty.style.display = '';
+      if (rightLabels) rightLabels.innerHTML = '';
+      container._lat = null;
+      observeChartResize('lat-chart', renderLatencyChart);
       return;
     }
     if (empty) empty.style.display = 'none';
 
-    var w = 600, h = 160;
-    var pad = { l: 40, r: 12, t: 10, b: 18 };
-    var maxV = Math.max.apply(null, data.map(function (d) { return d.p99; })) * 1.08;
+    var rect = container.getBoundingClientRect();
+    var w = Math.max(280, Math.round(rect.width));
+    var h = Math.max(180, Math.round(rect.height));
+    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+
+    var pad = { l: 56, r: 70, t: 14, b: 26 };
+    var plotW = w - pad.l - pad.r;
+    var plotH = h - pad.t - pad.b;
+
+    var maxV = Math.max.apply(null, data.map(function (d) { return d.p99; }));
     if (!isFinite(maxV) || maxV <= 0) maxV = 1;
-    function ys(v) { return h - pad.b - (v / maxV) * (h - pad.t - pad.b); }
-    function xs(i) { return pad.l + (i / Math.max(1, data.length - 1)) * (w - pad.l - pad.r); }
+    var scale = niceScale(0, maxV, 5);
+
+    function xs(i) {
+      if (data.length < 2) return pad.l + plotW / 2;
+      return pad.l + (i / (data.length - 1)) * plotW;
+    }
+    function ys(v) {
+      return pad.t + plotH - ((v - scale.min) / (scale.max - scale.min || 1)) * plotH;
+    }
+
     function pathFor(key) {
-      return data.map(function (d, i) { return (i === 0 ? 'M' : 'L') + xs(i).toFixed(1) + ',' + ys(d[key]).toFixed(1); }).join(' ');
+      return data.map(function (d, i) {
+        return (i === 0 ? 'M' : 'L') + xs(i).toFixed(1) + ',' + ys(d[key]).toFixed(1);
+      }).join(' ');
     }
     function bandFor(a, b) {
-      var s = '';
-      data.forEach(function (d, i) { s += (i === 0 ? 'M' : 'L') + xs(i).toFixed(1) + ',' + ys(d[a]).toFixed(1); });
+      var top = data.map(function (d, i) {
+        return (i === 0 ? 'M' : 'L') + xs(i).toFixed(1) + ',' + ys(d[a]).toFixed(1);
+      }).join(' ');
+      var bottom = '';
       for (var i = data.length - 1; i >= 0; i--) {
-        s += 'L' + xs(i).toFixed(1) + ',' + ys(data[i][b]).toFixed(1);
+        bottom += 'L' + xs(i).toFixed(1) + ',' + ys(data[i][b]).toFixed(1) + ' ';
       }
-      s += 'Z';
-      return s;
+      return top + ' ' + bottom + 'Z';
     }
-    var yTicks = 4;
-    var gridSvg = '';
-    var axisSvg = '';
-    for (var i = 0; i <= yTicks; i++) {
-      var v = (maxV * i) / yTicks;
-      var y = ys(v);
-      gridSvg += '<line x1="' + pad.l + '" x2="' + (w - pad.r) + '" y1="' + y + '" y2="' + y + '"/>';
-      axisSvg += '<text x="' + (pad.l - 6) + '" y="' + (y + 3) + '" text-anchor="end">' + Math.round(v) + 'ms</text>';
-    }
+
+    // Grid lines + y-axis labels with nice numbers.
+    var grid = '';
+    var yaxis = '';
+    scale.ticks.forEach(function (tick) {
+      var y = ys(tick);
+      grid += '<line x1="' + pad.l + '" x2="' + (w - pad.r) + '" y1="' + y.toFixed(1) + '" y2="' + y.toFixed(1) + '"/>';
+      yaxis += '<text x="' + (pad.l - 8) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end">' + escapeHtml(formatAxisMs(tick)) + '</text>';
+    });
+
+    // X-axis: show attempt-window markers at 0%, 25%, 50%, 75%, 100% of the
+    // window. With our rolling window of `latencySeries`, each entry maps to
+    // an attempt index t (1-based). Use that for honest labels.
+    var xaxis = '';
+    var xMarks = [0, 0.25, 0.5, 0.75, 1];
+    xMarks.forEach(function (frac) {
+      var i = Math.round(frac * (data.length - 1));
+      var attemptNumber = data[i] && data[i].t ? data[i].t : (i + 1);
+      var x = xs(i);
+      xaxis += '<line x1="' + x.toFixed(1) + '" x2="' + x.toFixed(1) + '" y1="' + (pad.t + plotH) + '" y2="' + (pad.t + plotH + 4) + '"/>';
+      xaxis += '<text x="' + x.toFixed(1) + '" y="' + (h - pad.b + 16) + '" text-anchor="middle">#' + attemptNumber + '</text>';
+    });
+
+    // Axis frame.
+    var frame =
+      '<line class="axis-line" x1="' + pad.l + '" y1="' + pad.t + '" x2="' + pad.l + '" y2="' + (pad.t + plotH) + '"/>'
+      + '<line class="axis-line" x1="' + pad.l + '" y1="' + (pad.t + plotH) + '" x2="' + (w - pad.r) + '" y2="' + (pad.t + plotH) + '"/>';
+
+    var bandSvg =
+      '<path class="band-p99" d="' + bandFor('p95', 'p99') + '"/>'
+      + '<path class="band-p50" d="' + bandFor('p50', 'p95') + '"/>';
+    var lineSvg =
+      '<path class="line-p99" d="' + pathFor('p99') + '"/>'
+      + '<path class="line-p95" d="' + pathFor('p95') + '"/>'
+      + '<path class="line-p50" d="' + pathFor('p50') + '"/>';
+
+    // Crosshair (hidden until hover sets coordinates).
+    var crosshair =
+      '<line id="lat-crosshair-v" class="crosshair" x1="0" x2="0" y1="' + pad.t + '" y2="' + (pad.t + plotH) + '" style="display:none"/>'
+      + '<circle id="lat-crosshair-p50" class="crosshair-dot dot-p50" cx="0" cy="0" r="3.5" style="display:none"/>'
+      + '<circle id="lat-crosshair-p95" class="crosshair-dot dot-p95" cx="0" cy="0" r="3.5" style="display:none"/>'
+      + '<circle id="lat-crosshair-p99" class="crosshair-dot dot-p99" cx="0" cy="0" r="3.5" style="display:none"/>';
+
     svg.innerHTML =
-      '<g class="grid">' + gridSvg + '</g>' +
-      '<path class="band-p95" d="' + bandFor('p95', 'p99') + '"/>' +
-      '<path class="band-p50" d="' + bandFor('p50', 'p95') + '"/>' +
-      '<path class="line-p99" d="' + pathFor('p99') + '"/>' +
-      '<path class="line-p95" d="' + pathFor('p95') + '"/>' +
-      '<path class="line-p50" d="' + pathFor('p50') + '"/>' +
-      '<g class="axis">' + axisSvg + '<text x="' + pad.l + '" y="' + (h - 4) + '">0</text><text x="' + (w - pad.r) + '" y="' + (h - 4) + '" text-anchor="end">now</text></g>';
+      '<g class="grid">' + grid + '</g>'
+      + frame
+      + bandSvg
+      + lineSvg
+      + '<g class="axis y-axis">' + yaxis + '</g>'
+      + '<g class="axis x-axis">' + xaxis + '</g>'
+      + crosshair;
+
+    // Right-edge "current value" annotations so users can read the latest
+    // p50/p95/p99 without hovering.
+    if (rightLabels) {
+      var latest = data[data.length - 1];
+      rightLabels.innerHTML =
+        '<div class="lat-chart__pill p50" title="latest p50">'
+        + '<span class="sw"></span><span class="lbl">p50</span><span class="val">' + escapeHtml(formatMs(latest.p50)) + '</span>'
+        + '</div>'
+        + '<div class="lat-chart__pill p95" title="latest p95">'
+        + '<span class="sw"></span><span class="lbl">p95</span><span class="val">' + escapeHtml(formatMs(latest.p95)) + '</span>'
+        + '</div>'
+        + '<div class="lat-chart__pill p99" title="latest p99">'
+        + '<span class="sw"></span><span class="lbl">p99</span><span class="val">' + escapeHtml(formatMs(latest.p99)) + '</span>'
+        + '</div>';
+    }
+
+    container._lat = { data: data, xs: xs, ys: ys, pad: pad, w: w, h: h, plotW: plotW, scale: scale };
+    observeChartResize('lat-chart', renderLatencyChart);
+  }
+
+  function attachLatencyHover() {
+    var container = $('lat-chart');
+    if (!container || container._hoverAttached) return;
+    container._hoverAttached = true;
+    var tooltip = ensureChartTooltip();
+    var svg = $('lat-chart-svg');
+
+    function moveCrosshair(idx) {
+      var geom = container._lat;
+      if (!geom) return;
+      var d = geom.data[idx];
+      var cx = geom.xs(idx);
+      var v = svg.querySelector('#lat-crosshair-v');
+      var p50 = svg.querySelector('#lat-crosshair-p50');
+      var p95 = svg.querySelector('#lat-crosshair-p95');
+      var p99 = svg.querySelector('#lat-crosshair-p99');
+      if (v) { v.setAttribute('x1', cx.toFixed(1)); v.setAttribute('x2', cx.toFixed(1)); v.style.display = ''; }
+      if (p50) { p50.setAttribute('cx', cx.toFixed(1)); p50.setAttribute('cy', geom.ys(d.p50).toFixed(1)); p50.style.display = ''; }
+      if (p95) { p95.setAttribute('cx', cx.toFixed(1)); p95.setAttribute('cy', geom.ys(d.p95).toFixed(1)); p95.style.display = ''; }
+      if (p99) { p99.setAttribute('cx', cx.toFixed(1)); p99.setAttribute('cy', geom.ys(d.p99).toFixed(1)); p99.style.display = ''; }
+    }
+    function hideCrosshair() {
+      ['#lat-crosshair-v', '#lat-crosshair-p50', '#lat-crosshair-p95', '#lat-crosshair-p99'].forEach(function (sel) {
+        var el = svg.querySelector(sel);
+        if (el) el.style.display = 'none';
+      });
+    }
+
+    container.addEventListener('mousemove', function (e) {
+      var geom = container._lat;
+      if (!geom || !geom.data.length) { hideChartTooltip(); hideCrosshair(); return; }
+      var rect = container.getBoundingClientRect();
+      var scaleX = geom.w / rect.width;
+      var xInView = (e.clientX - rect.left) * scaleX;
+      if (xInView < geom.pad.l || xInView > geom.w - 0) {
+        hideChartTooltip();
+        hideCrosshair();
+        return;
+      }
+      // Find nearest data index.
+      var idx = 0;
+      var bestDist = Infinity;
+      for (var i = 0; i < geom.data.length; i++) {
+        var d = Math.abs(geom.xs(i) - xInView);
+        if (d < bestDist) { bestDist = d; idx = i; }
+      }
+      var sample = geom.data[idx];
+      moveCrosshair(idx);
+      var attemptNumber = sample.t || (idx + 1);
+      showChartTooltip(tooltip, e.clientX, e.clientY, [
+        { label: 'attempt window', value: '#' + attemptNumber, muted: true },
+        { label: 'p50', value: formatMs(sample.p50), color: 'var(--ok)' },
+        { label: 'p95', value: formatMs(sample.p95), color: 'var(--warn)' },
+        { label: 'p99', value: formatMs(sample.p99), color: 'var(--err)' },
+      ]);
+    });
+    container.addEventListener('mouseleave', function () {
+      hideChartTooltip();
+      hideCrosshair();
+    });
+  }
+
+  // ----------------------------------------------------------------
+  // Shared chart tooltip
+  // ----------------------------------------------------------------
+  function ensureChartTooltip() {
+    var tip = document.getElementById('chart-tooltip');
+    if (tip) return tip;
+    tip = document.createElement('div');
+    tip.id = 'chart-tooltip';
+    tip.className = 'chart-tooltip';
+    tip.hidden = true;
+    document.body.appendChild(tip);
+    return tip;
+  }
+  function showChartTooltip(tip, clientX, clientY, rows) {
+    var html = rows.map(function (r) {
+      var swStyle = r.color ? 'background:' + r.color : 'background:transparent;border:1px dashed var(--line)';
+      var rowClass = 'chart-tooltip__row' + (r.muted ? ' muted' : '');
+      return '<div class="' + rowClass + '">'
+        + '<span class="chart-tooltip__sw" style="' + swStyle + '"></span>'
+        + '<span class="chart-tooltip__lbl">' + escapeHtml(r.label) + '</span>'
+        + '<span class="chart-tooltip__val">' + escapeHtml(r.value) + '</span>'
+        + '</div>';
+    }).join('');
+    tip.innerHTML = html;
+    tip.hidden = false;
+    // Position with a small offset; flip to the left/up edge when near screen bounds.
+    var rect = tip.getBoundingClientRect();
+    var offset = 14;
+    var x = clientX + offset;
+    var y = clientY + offset;
+    if (x + rect.width + 8 > window.innerWidth) x = clientX - rect.width - offset;
+    if (y + rect.height + 8 > window.innerHeight) y = clientY - rect.height - offset;
+    if (x < 4) x = 4;
+    if (y < 4) y = 4;
+    tip.style.transform = 'translate(' + Math.round(x) + 'px,' + Math.round(y) + 'px)';
+  }
+  function hideChartTooltip() {
+    var tip = document.getElementById('chart-tooltip');
+    if (tip) tip.hidden = true;
   }
 
   // ----------------------------------------------------------------
   // Stage timings
+  //   Horizontal bar per stage showing p50 / p95 / p99 against the slowest
+  //   stage's p99 as the shared max. Bars layer p99 (back) → p95 (mid) →
+  //   p50 (front) so the three percentiles are simultaneously legible.
+  //   Hovering a row reveals a precise tooltip with values + share of total.
   // ----------------------------------------------------------------
   function renderStageTimings() {
     var body = $('stage-timings-body');
@@ -413,19 +750,63 @@
     }
     var max = Math.max.apply(null, stages.map(function (s) { return s.p99; }));
     if (!isFinite(max) || max <= 0) max = 1;
-    body.innerHTML = stages.map(function (s) {
-      return '<div class="stage">'
-        + '<div class="stage__name">' + escapeHtml(s.name) + '</div>'
-        + '<div class="stage__bar" title="p50 ' + s.p50.toFixed(0) + 'ms / p95 ' + s.p95.toFixed(0) + 'ms / p99 ' + s.p99.toFixed(0) + 'ms">'
-        + '<div class="p95" style="width:' + ((s.p95 / max) * 100).toFixed(1) + '%"></div>'
-        + '<div class="p50" style="width:' + ((s.p50 / max) * 100).toFixed(1) + '%"></div>'
+    var totalP50 = stages.reduce(function (acc, s) { return acc + (s.p50 || 0); }, 0) || 1;
+
+    body.innerHTML = stages.map(function (s, idx) {
+      var shareOfP50 = ((s.p50 / totalP50) * 100);
+      var dataStage = encodeURIComponent(JSON.stringify({
+        name: s.name,
+        p50: s.p50,
+        p95: s.p95,
+        p99: s.p99,
+        share: shareOfP50,
+      }));
+      return '<div class="stage" data-stage-idx="' + idx + '" data-stage="' + dataStage + '">'
+        + '<div class="stage__name" title="' + escapeHtml(s.name) + '">' + escapeHtml(s.name) + '</div>'
+        + '<div class="stage__bar">'
+        + '<div class="stage__bar-track"></div>'
+        + '<div class="stage__bar-p99" style="width:' + ((s.p99 / max) * 100).toFixed(1) + '%"></div>'
+        + '<div class="stage__bar-p95" style="width:' + ((s.p95 / max) * 100).toFixed(1) + '%"></div>'
+        + '<div class="stage__bar-p50" style="width:' + ((s.p50 / max) * 100).toFixed(1) + '%"></div>'
         + '</div>'
-        + '<div class="stage__nums">' + s.p50.toFixed(0) + '/' + s.p95.toFixed(0) + '/' + s.p99.toFixed(0) + ' ms</div>'
+        + '<div class="stage__nums">'
+        + '<span class="ok">' + escapeHtml(formatMs(s.p50)) + '</span> / '
+        + '<span class="warn">' + escapeHtml(formatMs(s.p95)) + '</span> / '
+        + '<span class="err">' + escapeHtml(formatMs(s.p99)) + '</span>'
+        + '</div>'
         + '</div>';
     }).join('');
 
+    attachStageHover(body);
+
     var tag = $('stage-status-tag');
     if (tag) tag.textContent = state.runActive ? 'live' : (state.report ? 'final' : 'static');
+  }
+
+  function attachStageHover(body) {
+    if (!body || body._stageHoverAttached) {
+      // Already wired up; re-attach handlers on the same parent so they
+      // continue to work after innerHTML re-renders.
+    }
+    body._stageHoverAttached = true;
+    var tooltip = ensureChartTooltip();
+    body.onmousemove = function (e) {
+      var row = e.target.closest && e.target.closest('.stage[data-stage]');
+      if (!row) { hideChartTooltip(); return; }
+      try {
+        var s = JSON.parse(decodeURIComponent(row.getAttribute('data-stage')));
+        showChartTooltip(tooltip, e.clientX, e.clientY, [
+          { label: 'stage', value: s.name, muted: true },
+          { label: 'p50', value: formatMs(s.p50), color: 'var(--ok)' },
+          { label: 'p95', value: formatMs(s.p95), color: 'var(--warn)' },
+          { label: 'p99', value: formatMs(s.p99), color: 'var(--err)' },
+          { label: 'share of median attempt', value: s.share.toFixed(1) + '%', muted: true },
+        ]);
+      } catch (err) {
+        hideChartTooltip();
+      }
+    };
+    body.onmouseleave = hideChartTooltip;
   }
 
   function stageSummary() {
@@ -1337,6 +1718,8 @@
     renderHistoryTable();
     renderScheduleStrip();
     updateEffectiveRate();
+    attachLatencyHover();
+    attachSparkHover();
     var fc = $('failures-card');
     if (fc) {
       var summaries = bootstrap.failure_summaries || [];

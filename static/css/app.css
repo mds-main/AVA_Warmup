@@ -528,10 +528,25 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* Sparkline */
-.spark { display: block; width: 100%; height: 36px; }
+.spark {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 40px;
+  cursor: crosshair;
+}
+.spark__svg { display: block; width: 100%; height: 100%; }
 .spark .area { fill: url(#sparkFill); }
 .spark .line { stroke: var(--amber); stroke-width: 1.5; fill: none; }
 .spark .baseline { stroke: var(--line); stroke-dasharray: 2 3; }
+.spark__current { fill: var(--amber); stroke: var(--bg); stroke-width: 1; }
+.spark__empty {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  color: var(--fg-4);
+  font-family: var(--mono);
+  font-size: 11px;
+}
 
 /* ============================================================
    Diagnostics feed (right side)
@@ -676,57 +691,203 @@ a { color: inherit; text-decoration: none; }
    ============================================================ */
 .lat-chart {
   position: relative;
-  height: 180px;
+  height: 220px;
   border: 1px solid var(--line);
   border-radius: var(--r);
   background:
     linear-gradient(180deg, var(--bg-2), var(--surface));
   overflow: hidden;
+  cursor: crosshair;
 }
 .lat-chart svg { display: block; width: 100%; height: 100%; }
-.lat-chart .band-p99 { fill: oklch(70% 0.19 25 / 0.12); }
-.lat-chart .band-p95 { fill: oklch(80% 0.15 80 / 0.14); }
+.lat-chart .band-p99 { fill: oklch(70% 0.19 25 / 0.10); }
 .lat-chart .band-p50 { fill: oklch(76% 0.14 155 / 0.18); }
-.lat-chart .line-p50 { stroke: var(--ok); stroke-width: 1.5; fill: none; }
-.lat-chart .line-p95 { stroke: var(--warn); stroke-width: 1.25; fill: none; stroke-dasharray: 2 2; }
-.lat-chart .line-p99 { stroke: var(--err); stroke-width: 1.25; fill: none; stroke-dasharray: 4 2; }
-.lat-chart .grid line { stroke: var(--line); stroke-dasharray: 2 4; }
-.lat-chart .axis text { fill: var(--fg-4); font-family: var(--mono); font-size: 9.5px; }
+.lat-chart .line-p50 { stroke: var(--ok); stroke-width: 1.6; fill: none; stroke-linejoin: round; }
+.lat-chart .line-p95 { stroke: var(--warn); stroke-width: 1.4; fill: none; stroke-linejoin: round; stroke-dasharray: 4 3; }
+.lat-chart .line-p99 { stroke: var(--err); stroke-width: 1.4; fill: none; stroke-linejoin: round; stroke-dasharray: 6 3; }
+.lat-chart .grid line { stroke: var(--line); stroke-dasharray: 2 4; opacity: 0.7; }
+.lat-chart .axis-line { stroke: var(--line-strong); stroke-width: 1; }
+.lat-chart .x-axis line { stroke: var(--line-strong); }
+.lat-chart .axis text {
+  fill: var(--fg-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.lat-chart .crosshair {
+  stroke: var(--amber);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.6;
+  pointer-events: none;
+}
+.lat-chart .crosshair-dot {
+  stroke: var(--bg);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+.lat-chart .crosshair-dot.dot-p50 { fill: var(--ok); }
+.lat-chart .crosshair-dot.dot-p95 { fill: var(--warn); }
+.lat-chart .crosshair-dot.dot-p99 { fill: var(--err); }
 .lat-chart__empty {
   position: absolute; inset: 0;
   display: grid; place-items: center;
   color: var(--fg-4); font-size: 12px;
   font-family: var(--mono);
+  pointer-events: none;
 }
+.lat-chart__current {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+}
+.lat-chart__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background: oklch(0% 0 0 / 0.35);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.lat-chart__pill .sw {
+  width: 8px; height: 8px; border-radius: 2px;
+}
+.lat-chart__pill.p50 .sw { background: var(--ok); }
+.lat-chart__pill.p95 .sw { background: var(--warn); }
+.lat-chart__pill.p99 .sw { background: var(--err); }
+.lat-chart__pill .lbl { color: var(--fg-3); text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.08em; }
+.lat-chart__pill .val { color: var(--fg); font-weight: 600; }
 
 .lat-legend { display: flex; gap: 14px; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--bg-1); }
 .lat-legend__i { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--fg-2); }
 .lat-legend__sw { width: 14px; height: 3px; border-radius: 2px; }
+.lat-legend__i.muted { color: var(--fg-4); }
+
+/* ============================================================
+   Shared chart tooltip
+   ============================================================ */
+.chart-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 80;
+  min-width: 160px;
+  padding: 8px 10px;
+  background: oklch(14% 0.008 60 / 0.96);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-2);
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--fg);
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: grid;
+  gap: 4px;
+}
+.chart-tooltip[hidden] { display: none; }
+.chart-tooltip__row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-tooltip__row.muted .chart-tooltip__lbl,
+.chart-tooltip__row.muted .chart-tooltip__val {
+  color: var(--fg-3);
+  font-size: 11px;
+}
+.chart-tooltip__sw {
+  width: 10px; height: 10px;
+  border-radius: 3px;
+}
+.chart-tooltip__lbl {
+  color: var(--fg-3);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.chart-tooltip__val {
+  color: var(--fg);
+  font-family: var(--mono);
+  font-weight: 600;
+}
 
 /* Stage bars */
 .stage {
   display: grid;
   grid-template-columns: 120px 1fr auto;
-  gap: 10px;
+  gap: 12px;
   align-items: center;
-  padding: 6px 0;
+  padding: 8px 12px;
   font-size: 12px;
+  border-radius: 6px;
+  transition: background .12s;
 }
 .stage + .stage { border-top: 1px dashed var(--line); }
-.stage__name { font-family: var(--mono); color: var(--fg-2); font-size: 11.5px; }
+.stage:hover { background: var(--bg-2); }
+.stage__name {
+  font-family: var(--mono);
+  color: var(--fg-2);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .stage__bar {
   position: relative;
-  height: 8px;
-  background: var(--bg-2);
+  height: 10px;
+  background: transparent;
   border-radius: 999px;
-  border: 1px solid var(--line);
-  overflow: hidden;
 }
-.stage__bar .p50 { position: absolute; top: 0; left: 0; height: 100%; background: var(--ok); }
-.stage__bar .p95 { position: absolute; top: 0; left: 0; height: 100%; background: var(--warn); opacity: 0.5; }
-.stage__nums { font-family: var(--mono); font-size: 11px; color: var(--fg-3); white-space: nowrap; }
+.stage__bar-track {
+  position: absolute; inset: 0;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+/* Layered bars: p99 sits behind, p95 atop, p50 on top so all three
+   percentiles are visible regardless of relative sizes. */
+.stage__bar-p99 {
+  position: absolute; top: 1px; bottom: 1px; left: 1px;
+  background: oklch(70% 0.19 25 / 0.45);
+  border-radius: 999px;
+}
+.stage__bar-p95 {
+  position: absolute; top: 1px; bottom: 1px; left: 1px;
+  background: oklch(80% 0.15 80 / 0.6);
+  border-radius: 999px;
+}
+.stage__bar-p50 {
+  position: absolute; top: 1px; bottom: 1px; left: 1px;
+  background: var(--ok);
+  border-radius: 999px;
+}
+.stage__nums {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.stage__nums .ok { color: var(--ok); }
+.stage__nums .warn { color: var(--warn); }
+.stage__nums .err { color: var(--err); }
 .stage__empty {
-  padding: 12px 4px;
+  padding: 14px 12px;
   color: var(--fg-4);
   font-size: 12px;
   font-style: italic;
