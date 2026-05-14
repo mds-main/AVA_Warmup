@@ -1261,17 +1261,27 @@
     if (!a || !a.raw) return;
     var raw = a.raw;
     if (raw.conversation_id) return;
-    var messageId = raw.message_id;
-    if (!messageId) return;
     if (!state.config.genesys_oauth_configured) return;
-    var cacheKey = String(messageId);
+    // Try every UUID we observed across the received frames in addition to
+    // the primary message_id. Genesys has a platform messageId (body.id) and
+    // a separate channel.messageId — only the platform one is valid for
+    // /details, and we don't always know up-front which path holds it.
+    var uuidPaths = raw.genesys_uuid_paths || {};
+    var candidates = Object.keys(uuidPaths);
+    if (raw.message_id && candidates.indexOf(raw.message_id) === -1) {
+      candidates.unshift(raw.message_id);
+    }
+    if (!candidates.length) return;
+    var cacheKey = candidates.join('|');
     if (genesysConversationLookupCache[cacheKey]) {
       applyGenesysLookup(a, genesysConversationLookupCache[cacheKey]);
       return;
     }
     var runMeta = (state.warmup) || (state.report && state.report.model_warmup_run) || {};
     var region = runMeta.region || state.config.gc_region || '';
-    var url = '/genesys/conversation_lookup?message_id=' + encodeURIComponent(messageId)
+    var url = '/genesys/conversation_lookup'
+      + '?message_id=' + encodeURIComponent(raw.message_id || candidates[0])
+      + '&candidates=' + encodeURIComponent(candidates.join(','))
       + (region ? '&region=' + encodeURIComponent(region) : '');
     a._genesysLookupState = 'loading';
     renderDetail();
@@ -1291,10 +1301,12 @@
     if (!a || !a.raw) return;
     if (body && body.ok && body.conversation_id) {
       a.raw.conversation_id = body.conversation_id;
+      a._genesysLookupMatchedId = body.matched_message_id || null;
       a._genesysLookupState = 'resolved';
     } else {
       a._genesysLookupState = 'error';
       a._genesysLookupError = (body && body.error) || 'Lookup failed';
+      a._genesysLookupAttempts = (body && body.attempts) || null;
     }
     if (state.detailAttempt === a) renderDetail();
   }
@@ -1363,13 +1375,17 @@
     }
 
     var rows = '';
+    var hasCandidates = messageId || Object.keys(uuidPaths).length > 0;
     // Authoritative conversationId — either pre-resolved by the REST lookup
     // or fetched lazily when the detail panel opened. The Web Messaging
     // guest WebSocket does not expose this field directly; see
     // GET /api/v2/conversations/messages/{messageId}/details.
     if (conversationId) {
-      rows += row('conversationId (interactionId)', conversationId, true);
-    } else if (messageId && state.config.genesys_oauth_configured) {
+      var matchedHint = a._genesysLookupMatchedId
+        ? 'matched messageId ' + a._genesysLookupMatchedId
+        : '';
+      rows += row('conversationId (interactionId)', conversationId, true, matchedHint);
+    } else if (hasCandidates && state.config.genesys_oauth_configured) {
       var lookupHint = 'Looking up via Conversations API…';
       if (a._genesysLookupState === 'error') {
         lookupHint = a._genesysLookupError || 'Lookup failed';
@@ -1379,7 +1395,7 @@
         + '<div class="genesys__val mono"><span style="color:var(--fg-3)">—</span>'
         + '<span class="genesys__hint">' + escapeHtml(lookupHint) + '</span></div>'
         + '</div>';
-    } else if (messageId) {
+    } else if (hasCandidates) {
       rows += '<div class="genesys__row">'
         + '<div class="genesys__lbl">conversationId (interactionId)</div>'
         + '<div class="genesys__val mono"><span style="color:var(--fg-3)">—</span>'

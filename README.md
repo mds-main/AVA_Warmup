@@ -194,7 +194,7 @@ Required only when the feature in the right column is used.
 | `AVA_WARMUP_HISTORY_MAX_RUNS` | `50` | Maximum retained history entries. |
 | `AVA_WARMUP_HISTORY_FULL_JSON_RUNS` | `20` | Newest reports kept as full JSON. |
 | `AVA_WARMUP_HISTORY_GZIP_RUNS` | `20` | Additional reports kept as gzip JSON before summary-only compaction. |
-| `AVA_WARMUP_GENESYS_OAUTH_CLIENT_ID` | _(unset)_ | OAuth client-credentials client ID for the Genesys Conversations REST API. Required for the attempt-detail panel to resolve the Genesys `conversationId` (interactionId) — the Web Messaging guest WebSocket protocol does not expose it directly, so the app captures the `messageId` from `body.id` and calls `GET /api/v2/conversations/messages/{messageId}/details` to translate it. The OAuth client's role needs `conversation:communication:view`. |
+| `AVA_WARMUP_GENESYS_OAUTH_CLIENT_ID` | _(unset)_ | OAuth client-credentials client ID for the Genesys Conversations REST API. Required for the attempt-detail panel to resolve the Genesys `conversationId` (interactionId) — the Web Messaging guest WebSocket protocol does not expose it directly, so the app captures every UUID seen across received frames (e.g. `body.id`, `body.channel.messageId`, `body.metadata.correlationId`) and calls `GET /api/v2/conversations/messages/{messageId}/details` for each until one resolves. The OAuth client's role needs `conversation:message:view` (or equivalent: `conversation:webmessaging:view` / `conversation:communication:view`). |
 | `AVA_WARMUP_GENESYS_OAUTH_CLIENT_SECRET` | _(unset)_ | Paired secret for the OAuth client above. |
 
 ### Example

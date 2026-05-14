@@ -1492,16 +1492,28 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
     def lookup_genesys_conversation():
         """Translate a Web Messaging messageId into a Genesys conversationId.
 
-        Uses OAuth client-credentials (env-configured) against
-        ``GET /api/v2/conversations/messages/{messageId}/details``. Returns
-        ``{"ok": false, "error": "..."}`` with a useful diagnostic when the
-        operator hasn't configured credentials, so the UI can render a hint.
+        Accepts ``message_id`` plus optional ``candidates`` (comma-separated
+        UUIDs harvested from received frames). The Web Messaging guest
+        protocol can put the Genesys platform messageId at ``body.id`` or
+        the channel-side ID at ``body.channel.messageId`` — only the
+        platform one is valid for ``/details``. We try each candidate until
+        one resolves, and report which ID matched so the UI can label it.
         """
 
         message_id = str(request.args.get("message_id") or "").strip()
+        candidates_raw = str(request.args.get("candidates") or "").strip()
         region = str(request.args.get("region") or "").strip()
-        if not message_id:
+
+        candidate_ids: list[str] = []
+        seen: set[str] = set()
+        for candidate in [message_id] + candidates_raw.split(","):
+            normalized = candidate.strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                candidate_ids.append(normalized)
+        if not candidate_ids:
             return jsonify({"ok": False, "error": "message_id is required."}), 400
+
         cfg: AppConfig = app.config["app_config"]
         client_id = (cfg.genesys_oauth_client_id or "").strip()
         client_secret = (cfg.genesys_oauth_client_secret or "").strip()
@@ -1517,21 +1529,36 @@ def create_app(config: Optional[AppConfig] = None) -> Flask:
             }), 200
         target_region = region or (cfg.gc_region or "").strip() or "mypurecloud.com"
         client = _get_or_build_genesys_api_client(target_region, client_id, client_secret)
-        try:
-            result = client.get_conversation_id_for_message(message_id)
-        except GenesysApiError as exc:
-            return jsonify({
-                "ok": False,
-                "error": str(exc),
-                "configured": True,
-            }), 200
+
+        attempts: list[dict[str, Any]] = []
+        last_error: Optional[str] = None
+        for candidate_id in candidate_ids:
+            try:
+                result = client.get_conversation_id_for_message(candidate_id)
+            except GenesysApiError as exc:
+                attempts.append({"message_id": candidate_id, "error": str(exc)})
+                last_error = str(exc)
+                continue
+            conversation_id = result.get("conversation_id")
+            attempts.append({
+                "message_id": candidate_id,
+                "conversation_id": conversation_id,
+            })
+            if conversation_id:
+                return jsonify({
+                    "ok": True,
+                    "configured": True,
+                    "conversation_id": conversation_id,
+                    "matched_message_id": candidate_id,
+                    "region": target_region,
+                    "attempts": attempts,
+                })
         return jsonify({
-            "ok": True,
+            "ok": False,
             "configured": True,
-            "conversation_id": result.get("conversation_id"),
-            "message_id": message_id,
-            "region": target_region,
-        })
+            "error": last_error or "No candidate messageId resolved to a conversation.",
+            "attempts": attempts,
+        }), 200
 
     @app.route("/run/model_warm_up/schedule", methods=["POST"])
     def save_model_warmup_schedule():
