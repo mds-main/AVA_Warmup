@@ -54,6 +54,10 @@
     drawerOpen: false,
     drawerTab: 'target',
     detailAttempt: null,
+    dashboardReloadPaused: (function () {
+      try { return localStorage.getItem('ava_warmup.auto_refresh_paused') === '1'; }
+      catch (e) { return false; }
+    })(),
 
     // chart series — populated from real attempt data
     latencySeries: [],   // [{t, p50, p95, p99}]
@@ -301,7 +305,14 @@
              + '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l13-8Z"/></svg>'
              + 'Start Warm Up <span class="kbd">⌘↵</span></button>';
       } else if (phase === 'running' || phase === 'stopping') {
-        html = '<button class="btn btn--danger btn--collapse-label" data-action="stop" title="Stop"' + (phase === 'stopping' ? ' disabled' : '') + '>'
+        var paused = !!state.dashboardReloadPaused;
+        var refreshIcon = paused
+          ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'
+          : '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>';
+        var refreshLabel = paused ? 'Resume auto-refresh' : 'Pause auto-refresh';
+        html += '<button class="btn btn--collapse-label" data-action="toggle-auto-refresh" title="' + refreshLabel + '" aria-pressed="' + (paused ? 'true' : 'false') + '">'
+             + refreshIcon + refreshLabel + '</button>';
+        html += '<button class="btn btn--danger btn--collapse-label" data-action="stop" title="Stop"' + (phase === 'stopping' ? ' disabled' : '') + '>'
              + '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>'
              + (phase === 'stopping' ? 'Stopping…' : 'Stop Run') + '</button>';
       }
@@ -1582,11 +1593,12 @@
   function startDashboardReload() {
     if (dashboardReloadTimer) return;
     dashboardReloadTimer = setInterval(function () {
-      if (state.runActive) {
-        window.location.reload();
-      } else {
+      if (!state.runActive) {
         stopDashboardReload();
+        return;
       }
+      if (state.dashboardReloadPaused) return;
+      window.location.reload();
     }, 10000);
   }
   function stopDashboardReload() {
@@ -1609,6 +1621,13 @@
         if (action === 'save-schedule') { e.preventDefault(); saveSchedule(); return; }
         if (action === 'start-from-drawer') { e.preventDefault(); closeDrawer(); startRun(); return; }
         if (action === 'theme') { e.preventDefault(); toggleTheme(); return; }
+        if (action === 'toggle-auto-refresh') {
+          e.preventDefault();
+          state.dashboardReloadPaused = !state.dashboardReloadPaused;
+          try { localStorage.setItem('ava_warmup.auto_refresh_paused', state.dashboardReloadPaused ? '1' : '0'); } catch (err) {}
+          renderTopBar();
+          return;
+        }
       }
 
       // Rail nav buttons — scroll/anchor only (no separate routes in SPA)
