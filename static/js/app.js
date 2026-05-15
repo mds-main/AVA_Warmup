@@ -1418,6 +1418,37 @@
         + '<div class="genesys__val mono">' + pathList + '</div>'
         + '</div>';
     }
+
+    // Per-candidate lookup outcomes — surfaces 404s for each ID we tried so
+    // the operator can see at a glance whether body.id was even present.
+    if (a._genesysLookupAttempts && a._genesysLookupAttempts.length) {
+      var attemptsList = a._genesysLookupAttempts.map(function (att) {
+        var label = att.conversation_id
+          ? '✓ ' + att.conversation_id
+          : (att.error || 'no match');
+        return '<div>' + escapeHtml(att.message_id) + ' <span class="genesys__hint">' + escapeHtml(label) + '</span></div>';
+      }).join('');
+      rows += '<div class="genesys__row">'
+        + '<div class="genesys__lbl">Lookup attempts</div>'
+        + '<div class="genesys__val mono">' + attemptsList + '</div>'
+        + '</div>';
+    }
+
+    // Raw debug frames — only present when AVA_WARMUP_DEBUG_CAPTURE_FRAMES=true.
+    // Useful when no captured ID resolves: lets the operator see the exact
+    // shape Genesys is sending and identify where body.id (if any) lives.
+    var debugFrames = raw.debug_frames || [];
+    if (debugFrames.length) {
+      var framesJson = JSON.stringify(debugFrames, null, 2);
+      rows += '<div class="genesys__row">'
+        + '<div class="genesys__lbl">Debug frames (' + debugFrames.length + ')</div>'
+        + '<div class="genesys__val"><details><summary class="genesys__hint" style="cursor:pointer">show raw payloads</summary>'
+        + '<pre class="mono" style="margin:6px 0 0;max-height:320px;overflow:auto;font-size:11px;background:var(--bg-2);padding:8px;border-radius:6px;white-space:pre-wrap">'
+        + escapeHtml(framesJson)
+        + '</pre></details></div>'
+        + '</div>';
+    }
+
     if (!rows) {
       rows = '<div class="placeholder">No Genesys identifiers were captured for this attempt (no frames received).</div>';
     }

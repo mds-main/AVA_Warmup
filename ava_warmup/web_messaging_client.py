@@ -352,18 +352,24 @@ class WebMessagingClient:
         if not isinstance(body, dict):
             return
 
-        candidates: list[object] = [body.get("id"), body.get("messageId")]
+        # Prefer body.id / body.messageId without requiring UUID format —
+        # Genesys' platform messageId is what /details accepts, and we
+        # cannot risk discarding it just because it doesn't look like a
+        # standard UUID. channel.messageId is the channel-side ID and
+        # NOT valid for /details, so it goes last as a soft fallback.
+        for raw_candidate in (body.get("id"), body.get("messageId")):
+            if isinstance(raw_candidate, str):
+                normalized = raw_candidate.strip()
+                if normalized:
+                    self.message_id = normalized
+                    return
         channel = body.get("channel")
         if isinstance(channel, dict):
-            candidates.append(channel.get("messageId"))
-
-        for raw_candidate in candidates:
-            if not isinstance(raw_candidate, str):
-                continue
-            normalized = raw_candidate.strip()
-            if normalized and self._is_likely_conversation_id(normalized):
-                self.message_id = normalized
-                return
+            raw_candidate = channel.get("messageId")
+            if isinstance(raw_candidate, str):
+                normalized = raw_candidate.strip()
+                if normalized:
+                    self.message_id = normalized
 
     def _capture_conversation_id_candidate(self, value: object, is_explicit: bool = False) -> None:
         if not isinstance(value, str) or not is_explicit:
@@ -401,6 +407,10 @@ class WebMessagingClient:
                 "conversation_id": self.conversation_id,
                 "participant_id": self.participant_id,
                 "conversation_id_candidates": list(self._conversation_id_candidates),
+                # Full payload (capped) so the operator can inspect the exact
+                # frame shape Genesys is sending — invaluable when the
+                # documented body.id path isn't present.
+                "payload": payload,
             }
         )
 
