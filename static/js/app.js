@@ -55,8 +55,14 @@
     drawerTab: 'target',
     detailAttempt: null,
     dashboardReloadPaused: (function () {
-      try { return localStorage.getItem('ava_warmup.auto_refresh_paused') === '1'; }
-      catch (e) { return false; }
+      // Auto-refresh is OFF by default. localStorage flips the choice only
+      // when the user has explicitly toggled it: '0' = on, '1' = off.
+      try {
+        var stored = localStorage.getItem('ava_warmup.auto_refresh_paused');
+        if (stored === '0') return false;
+        if (stored === '1') return true;
+        return true;
+      } catch (e) { return true; }
     })(),
 
     // chart series — populated from real attempt data
